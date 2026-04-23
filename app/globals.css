@@ -1,0 +1,353 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =====================================================================
+   Theme tokens  —  ink 色阶语义: 数字越大 = 在当前主题下"越被强调"
+   因此 light 下 ink-900 = 接近黑; dark 下 ink-900 = 接近白。
+   ===================================================================== */
+:root {
+  color-scheme: light;
+
+  /* Page / surface */
+  --canvas: 250 249 245;           /* #FAF9F5 warm cream */
+  --canvas-raised: 255 255 255;    /* #FFFFFF card */
+  --canvas-sunk: 242 241 235;      /* #F2F1EB sunk */
+  --hair: 231 228 217;             /* #E7E4D9 */
+  --hair-strong: 212 208 195;      /* #D4D0C3 */
+
+  /* Ink scale (emphasis ladder) */
+  --ink-50: 242 241 235;
+  --ink-100: 231 228 217;
+  --ink-200: 203 210 223;
+  --ink-300: 156 163 175;
+  --ink-400: 122 134 153;
+  --ink-500: 100 116 139;
+  --ink-600: 71 85 105;
+  --ink-700: 51 65 85;
+  --ink-800: 30 41 59;
+  --ink-900: 15 23 42;
+
+  /* Gold — brand accent */
+  --gold-50: 253 247 229;
+  --gold-100: 249 237 202;
+  --gold-200: 243 221 159;
+  --gold-400: 196 148 60;
+  --gold-500: 184 139 58;
+  --gold-600: 160 118 46;
+  --gold-700: 130 94 33;
+
+  /* Semantic gain/loss — 红涨绿跌（中国市场惯例） */
+  --gain-50: 254 226 226;
+  --gain-100: 254 202 202;
+  --gain-500: 220 38 38;
+  --gain-700: 153 27 27;
+  --loss-50: 220 249 237;
+  --loss-100: 190 242 220;
+  --loss-500: 5 150 105;
+  --loss-700: 6 95 70;
+
+  /* Effects */
+  --shadow-card: 0 1px 0 0 rgba(15, 42, 71, 0.04),
+    0 0 0 1px rgba(15, 42, 71, 0.06);
+  --shadow-card-hover: 0 4px 12px -2px rgba(15, 42, 71, 0.08),
+    0 0 0 1px rgba(15, 42, 71, 0.08);
+  --shadow-pop: 0 20px 40px -12px rgba(15, 42, 71, 0.18),
+    0 0 0 1px rgba(15, 42, 71, 0.06);
+
+  --scroll-thumb: rgb(212 208 195);
+
+  --page-glow: radial-gradient(
+      ellipse 900px 520px at 10% -10%,
+      rgba(184, 139, 58, 0.08),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 900px 520px at 110% 0%,
+      rgba(5, 150, 105, 0.05),
+      transparent 60%
+    );
+
+  /* Category palette (light) */
+  --cat-cash: #2563EB;
+  --cat-deposit: #4F46E5;
+  --cat-fund: #B88B3A;
+  --cat-securities: #059669;
+  --cat-crypto: #D97706;
+  --cat-liability: #DC2626;
+  --cat-other: #64748B;
+}
+
+.dark {
+  color-scheme: dark;
+
+  --canvas: 11 16 32;              /* #0B1020 deep navy */
+  --canvas-raised: 17 24 39;       /* #111827 */
+  --canvas-sunk: 14 21 36;         /* #0E1524 */
+  --hair: 30 41 59;                /* #1E293B */
+  --hair-strong: 51 65 85;         /* #334155 */
+
+  --ink-50: 15 23 42;
+  --ink-100: 30 41 59;
+  --ink-200: 39 52 73;
+  --ink-300: 71 85 105;
+  --ink-400: 100 116 139;
+  --ink-500: 148 163 184;
+  --ink-600: 203 213 225;
+  --ink-700: 226 232 240;
+  --ink-800: 241 245 249;
+  --ink-900: 248 250 252;
+
+  --gold-50: 27 22 5;
+  --gold-100: 46 38 16;
+  --gold-200: 74 58 24;
+  --gold-400: 201 155 58;
+  --gold-500: 212 169 78;
+  --gold-600: 224 184 104;
+  --gold-700: 240 202 124;
+
+  --gain-50: 54 18 18;
+  --gain-100: 86 26 26;
+  --gain-500: 248 113 113;
+  --gain-700: 252 165 165;
+  --loss-50: 13 45 33;
+  --loss-100: 22 78 56;
+  --loss-500: 52 211 153;
+  --loss-700: 110 231 183;
+
+  --shadow-card: 0 0 0 1px rgba(148, 163, 184, 0.08),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.02);
+  --shadow-card-hover: 0 0 0 1px rgba(148, 163, 184, 0.16),
+    0 8px 24px -8px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 24px 48px -16px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(148, 163, 184, 0.12);
+
+  --scroll-thumb: rgb(51 65 85);
+
+  --page-glow: radial-gradient(
+      ellipse 800px 500px at 10% -10%,
+      rgba(212, 169, 78, 0.06),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 900px 600px at 120% 10%,
+      rgba(52, 211, 153, 0.045),
+      transparent 60%
+    );
+
+  /* Category palette (dark) */
+  --cat-cash: #60A5FA;
+  --cat-deposit: #818CF8;
+  --cat-fund: #D4A94E;
+  --cat-securities: #34D399;
+  --cat-crypto: #F59E0B;
+  --cat-liability: #F87171;
+  --cat-other: #94A3B8;
+}
+
+/* =====================================================================
+   Global resets / body
+   ===================================================================== */
+html {
+  /* 整体 1.5x 视觉缩放 —— 同步缩放文字 + 间距 + 图表 */
+  zoom: 1.5;
+}
+
+html,
+body {
+  height: 100%;
+  background-color: rgb(var(--canvas));
+  color: rgb(var(--ink-900));
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Helvetica Neue", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01";
+  letter-spacing: -0.005em;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+body {
+  background-image: var(--page-glow);
+  background-attachment: fixed;
+}
+
+* {
+  border-color: rgb(var(--hair));
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: "JetBrains Mono", "Inter", ui-monospace, monospace;
+  letter-spacing: -0.01em;
+}
+
+/* =====================================================================
+   Components
+   ===================================================================== */
+@layer components {
+  .card {
+    @apply rounded-lg border border-hair bg-canvas-raised shadow-card;
+  }
+  .card-header {
+    @apply flex items-center justify-between border-b border-hair px-5 py-3.5;
+  }
+  .card-title {
+    @apply text-[13px] font-semibold text-ink-800;
+  }
+  .card-body {
+    @apply p-5;
+  }
+
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-500;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3.5 py-2 text-[13px] font-medium transition-colors duration-150 ease-smooth focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/60 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:pointer-events-none disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-gold-500 hover:bg-gold-600;
+    color: #0B1020; /* 始终用近黑色文字，保证在金色按钮上的对比度 */
+    box-shadow: 0 0 0 1px rgb(var(--gold-500) / 0.45),
+      0 8px 22px -8px rgb(var(--gold-500) / 0.35);
+  }
+  .btn-ghost {
+    @apply btn text-ink-500 hover:bg-ink-100 hover:text-ink-900;
+  }
+  .btn-outline {
+    @apply btn border border-hair-strong bg-canvas-raised text-ink-700 hover:border-ink-400 hover:bg-canvas-sunk;
+  }
+  .btn-danger {
+    @apply btn border border-loss-100 bg-loss-50 text-loss-700 hover:bg-loss-100;
+  }
+  .btn-accent {
+    @apply btn-primary;
+  }
+
+  /* Inputs */
+  .input {
+    @apply w-full rounded-md border border-hair bg-canvas-sunk px-3 py-2 text-[13px] text-ink-800 placeholder:text-ink-400 transition-colors duration-150 focus:border-gold-500 focus:outline-none focus:ring-2 focus:ring-gold-500/20;
+  }
+  .input-sm {
+    @apply rounded-md border border-hair bg-canvas-sunk px-2.5 py-1.5 text-xs;
+  }
+  .label {
+    @apply mb-1.5 block text-[12px] font-medium text-ink-500;
+  }
+
+  /* Chips */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-md border border-hair bg-canvas-sunk px-2 py-0.5 text-[11px] font-medium text-ink-600;
+  }
+  .chip-gain {
+    @apply border-gain-100 bg-gain-50 text-gain-700;
+  }
+  .chip-loss {
+    @apply border-loss-100 bg-loss-50 text-loss-700;
+  }
+  .chip-gold {
+    @apply border-gold-200 bg-gold-100 text-gold-700;
+  }
+  .chip-info {
+    @apply border-hair-strong bg-ink-100 text-ink-700;
+  }
+
+  /* Nav */
+  .nav-link {
+    @apply flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] text-ink-500 transition-colors duration-150 hover:text-ink-800;
+  }
+  .nav-link-active {
+    @apply bg-ink-100 text-ink-900 hover:text-ink-900;
+  }
+
+  /* Data table */
+  .data-table {
+    @apply w-full text-[13px];
+  }
+  .data-table thead tr {
+    @apply border-b border-hair;
+  }
+  /* 用 :where() 降低特异性到 (0,1,0)，让 utility 类（text-right 等）可覆盖默认对齐 */
+  .data-table :where(th) {
+    @apply px-3 py-2.5 text-left text-[11px] font-semibold text-ink-500;
+  }
+  .data-table :where(td) {
+    @apply border-b border-hair/60 px-3 py-3 align-middle text-ink-700;
+  }
+  .data-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .data-table tbody tr {
+    @apply transition-colors duration-100;
+  }
+  .data-table tbody tr:hover {
+    @apply bg-canvas-sunk;
+  }
+
+  /* Segmented */
+  .segmented {
+    @apply inline-flex rounded-md border border-hair bg-canvas-sunk p-0.5;
+  }
+  .segmented-item {
+    @apply rounded-[5px] px-3 py-1 text-[12px] font-medium text-ink-500 transition-all duration-150;
+  }
+  .segmented-item-active {
+    @apply bg-canvas-raised text-ink-900;
+    box-shadow: 0 0 0 1px rgb(var(--hair-strong) / 0.6);
+  }
+
+  .kpi-number {
+    @apply tabular font-display text-3xl font-semibold leading-tight text-ink-900;
+  }
+
+  /* Icon button (for theme toggle etc.) */
+  .icon-btn {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-md border border-hair bg-canvas-raised text-ink-600 transition-colors duration-150 hover:border-ink-400 hover:bg-canvas-sunk hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/60;
+  }
+}
+
+/* Focus-visible */
+*:focus {
+  outline: none;
+}
+*:focus-visible {
+  outline: 2px solid rgb(var(--gold-500));
+  outline-offset: 2px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 5px;
+  border: 2px solid rgb(var(--canvas));
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--ink-400));
+}
+
+/* Selection */
+::selection {
+  background: rgb(var(--gold-500) / 0.28);
+  color: rgb(var(--ink-900));
+}

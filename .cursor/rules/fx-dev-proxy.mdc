@@ -1,0 +1,39 @@
+---
+description: Dev server 必须通过本机 HTTP 代理访问聚合数据汇率接口（Clash Fake-IP 环境）
+alwaysApply: true
+---
+
+# Dev 启动 & 汇率代理
+
+本机开启了 **Clash/ClashX（Fake-IP 模式）**，Node 原生 fetch 默认不走系统代理，直接访问
+`op.juhe.cn` 会 `ENOTFOUND`。汇率刷新必须走 HTTP 代理。
+
+## 规则
+
+- `npm run dev` 已经默认带上 `FX_PROXY=http://127.0.0.1:7890`，**首选直接用它**。
+- 不要自己 `kill` 进程后用裸 `next dev` 重启；若必须手动启动 dev server，请带上环境变量：
+  ```bash
+  FX_PROXY=http://127.0.0.1:7890 npm run dev
+  # 或
+  HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 npm run dev
+  ```
+- 需要临时关代理（排查或代理未开）：`npm run dev:noproxy`。
+- 生产启动同样用 `npm run start`（已内置相同默认代理）。
+
+## 校验
+
+启动后第一次触发 `/api/fx?refresh=1`，dev 日志应看到：
+
+```
+[fx] using HTTP proxy for juhe: http://127.0.0.1:7890
+```
+
+若看到 `fetch failed | ENOTFOUND | getaddrinfo ENOTFOUND op.juhe.cn`，
+99% 是代理环境变量没生效或代理客户端没启动。
+
+## 相关代码
+
+- `lib/fx.ts` 中 `getFxDispatcher()` 按
+  `FX_PROXY > HTTPS_PROXY > HTTP_PROXY > ALL_PROXY`（大小写兼容）读取代理 URL。
+- `package.json` 的 `dev` / `start` 脚本已硬编码默认值 `http://127.0.0.1:7890`，
+  允许环境变量覆盖（`FX_PROXY=... npm run dev`）。

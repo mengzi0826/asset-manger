@@ -1,0 +1,30 @@
+---
+description: 汇率每 8 小时、股票每日北京 10:00/14:00 锚点；AppKey 仅在设置/环境变量
+alwaysApply: true
+---
+
+# 数据拉取与 API Key
+
+## AppKey
+
+- **禁止** 在 `lib/fx.ts`、`lib/stocks.ts` 等代码里写死聚合数据 Key。
+- 两枚 Key 分别由 `lib/juheKeys.ts` 从 `setting` 表（`juhe_fx_appkey` / `juhe_stock_appkey`）与可选环境变量 `JUHE_FX_APPKEY` / `JUHE_STOCK_APPKEY` 解析；**库内保存优先于环境变量**。
+- 用户可在 **设置页** 中填写或清除，无需改代码发版。
+
+## 汇率
+
+- 自动：非手动拉取后 **满 8 小时**再请求（`shouldRefreshFxEvery8h` / `lib/fx.ts`）。勿再使用「仅每日 10:00 一次」的旧逻辑。
+
+## 股票
+
+- 自动：在当日北京时间 **10:00** 与 **14:00** 之后各触发一轮（`shouldRefreshStocksBy10And14` / `lib/stocks.ts`）。在 **10:00 之前**不自动拉。
+
+## 相关文件
+
+- `lib/time.ts` — 间隔与锚点
+- `lib/juheKeys.ts` — Key 与设置页用状态
+- `app/settings/_components/JuheApiKeyForm.tsx`
+
+## 网络
+
+- 公网拉取须按 `fx-dev-proxy` 走 `FX_PROXY` 等，否则 Fake-IP 下会 `ENOTFOUND`。
