@@ -5,6 +5,10 @@
 
 **技术栈**：Next.js 14（App Router）· TypeScript · Tailwind CSS · SQLite（better-sqlite3）· Recharts
 
+**源码**：<https://github.com/mengzi0826/asset-manger>
+
+面向 AI / 协作者的运行与代理约定见仓库内 [AGENTS.md](./AGENTS.md)。
+
 ---
 
 ## 功能一览
@@ -48,7 +52,7 @@
 
 - 基准货币切换（CNY / USD）
 - 汇率管理：一键刷新（聚合数据 API）或手动覆盖
-- 股票价格 AppKey 配置（聚合数据股票数据接口）
+- 聚合数据 AppKey：汇率与股票价格分开配置（也可仅使用环境变量，见下文）
 - 数据备份：导出 JSON / 合并或覆盖导入 JSON
 
 ---
@@ -56,6 +60,8 @@
 ## 快速上手
 
 ```bash
+git clone https://github.com/mengzi0826/asset-manger.git
+cd asset-manger
 # 需要 Node.js 18+
 npm install
 npm run dev
@@ -86,7 +92,7 @@ npm run start
 | 股票价格刷新 | 聚合数据股票数据 API | `JUHE_STOCK_APPKEY` |
 
 
-- **汇率**：每 6 小时自动拉取一次，支持 CNY / USD / HKD / EUR / JPY / GBP；网络失败时使用缓存，也可手动输入汇率（标记为"手动"）。
+- **汇率**：距上次非手动拉取满 **8 小时**后再自动请求；支持货币仅 **CNY / USD / HKD**；网络失败时使用缓存，也可手动输入汇率（标记为「手动」）。
 - **股票价格**：每日 10:00 和 14:00（北京时间）各自动刷新一次；沪深 A 股 / 港股 / 美股三市场分别对应不同接口端点。未配置 AppKey 时跳过刷新，不影响其他功能。
 
 ### 代理设置
