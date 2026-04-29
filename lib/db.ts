@@ -39,6 +39,13 @@ function migrateSchema(db: Database.Database) {
   if (!names.has("symbol")) {
     db.exec("ALTER TABLE asset ADD COLUMN symbol TEXT");
   }
+  // 今日盈亏所需：每次股票价格刷新时同步落库的「单价涨跌额」「涨跌幅（小数，0.0013 表示 0.13%）」
+  if (!names.has("change_amount")) {
+    db.exec("ALTER TABLE asset ADD COLUMN change_amount REAL");
+  }
+  if (!names.has("change_percent")) {
+    db.exec("ALTER TABLE asset ADD COLUMN change_percent REAL");
+  }
 }
 
 function seedCategories(db: Database.Database) {
@@ -111,6 +118,10 @@ export interface AssetRow {
   quantity: number;
   unit_cost: number | null;
   current_price: number | null;
+  /** 当日单价涨跌额（原币），来自最近一次股票行情刷新 */
+  change_amount: number | null;
+  /** 当日涨跌幅（小数，0.0013 = 0.13%） */
+  change_percent: number | null;
   amount: number | null;
   annual_rate: number | null;
   start_date: string | null;

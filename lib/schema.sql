@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS asset (
   quantity REAL NOT NULL DEFAULT 1,
   unit_cost REAL,
   current_price REAL,
+  change_amount REAL,                  -- 当日单价涨跌额（原币），来自股票行情接口
+  change_percent REAL,                 -- 当日涨跌幅（小数：0.0013 = 0.13%）
   amount REAL,
   annual_rate REAL,
   start_date TEXT,

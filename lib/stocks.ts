@@ -138,6 +138,28 @@ function extractPrice(market: StockMarket, data: Record<string, unknown>): numbe
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/**
+ * 解析单股「当日涨跌」字段。三市字段名差异：
+ *   HS: increase（涨跌额，已是绝对值带正负）、increPer（涨跌幅，单位 %）
+ *   HK: uppic（涨跌额）、limit（涨跌幅，单位 %）
+ *   US: uppic（涨跌额）、limit（涨跌幅，单位 %）
+ * 注意：接口返回的是百分号下的原始数（0.13 表示 0.13%），这里统一换成小数（0.0013）。
+ */
+function extractChange(
+  market: StockMarket,
+  data: Record<string, unknown>
+): { changeAmount: number | null; changePercent: number | null } {
+  const rawAmount = market === "hs" ? data.increase : data.uppic;
+  const rawPercent = market === "hs" ? data.increPer : data.limit;
+  const amt = rawAmount == null ? NaN : Number(rawAmount);
+  const pct = rawPercent == null ? NaN : Number(rawPercent);
+  return {
+    changeAmount: Number.isFinite(amt) ? amt : null,
+    // 接口的 0.13 表示 0.13%；除以 100 转成纯小数
+    changePercent: Number.isFinite(pct) ? pct / 100 : null
+  };
+}
+
 function isFatalJuheCode(code: number): boolean {
   return [10001, 10002, 10003, 10004, 10005, 10007, 10008, 10009, 10011, 10012, 10021].includes(
     code
@@ -145,7 +167,14 @@ function isFatalJuheCode(code: number): boolean {
 }
 
 type FetchPriceResult =
-  | { ok: true; price: number; rawTime?: string | number; name?: string | number }
+  | {
+      ok: true;
+      price: number;
+      changeAmount: number | null;
+      changePercent: number | null;
+      rawTime?: string | number;
+      name?: string | number;
+    }
   | { ok: false; fatal: boolean; error: string };
 
 async function fetchPriceFromJuhe(
@@ -193,9 +222,15 @@ async function fetchPriceFromJuhe(
     if (price == null) {
       return { ok: false, fatal: false, error: "未解析到价格字段" };
     }
+    const { changeAmount, changePercent } = extractChange(
+      info.market,
+      data as Record<string, unknown>
+    );
     return {
       ok: true,
       price,
+      changeAmount,
+      changePercent,
       rawTime: data.time as string | number | undefined,
       name: data.name as string | number | undefined
     };
@@ -225,6 +260,10 @@ export interface StockAssetView {
 export interface StockRefreshItem extends StockAssetView {
   previous_price: number | null;
   fetched_price: number | null;
+  /** 接口返回的单股当日涨跌额（原币） */
+  change_amount: number | null;
+  /** 接口返回的当日涨跌幅（小数 0.0013 = 0.13%） */
+  change_percent: number | null;
   updated: boolean;
   error?: string;
 }
@@ -365,7 +404,12 @@ export async function refreshStockPrices(
 
   const db = getDB();
   const updateStmt = db.prepare(
-    `UPDATE asset SET current_price = ?, updated_at = ? WHERE id = ?`
+    `UPDATE asset
+       SET current_price = ?,
+           change_amount = ?,
+           change_percent = ?,
+           updated_at = ?
+       WHERE id = ?`
   );
 
   const items: StockRefreshItem[] = [];
@@ -390,6 +434,8 @@ export async function refreshStockPrices(
       updated_at: asset.updated_at,
       previous_price: asset.current_price,
       fetched_price: null,
+      change_amount: null,
+      change_percent: null,
       updated: false
     };
 
@@ -409,9 +455,11 @@ export async function refreshStockPrices(
     const r = await fetchPriceFromJuhe(info, appkey);
     if (r.ok) {
       const now = nowCn();
-      updateStmt.run(r.price, now, asset.id);
+      updateStmt.run(r.price, r.changeAmount, r.changePercent, now, asset.id);
       base.fetched_price = r.price;
       base.current_price = r.price;
+      base.change_amount = r.changeAmount;
+      base.change_percent = r.changePercent;
       base.updated_at = now;
       base.updated = true;
       updatedCount++;

@@ -38,10 +38,16 @@ export interface SecuritiesPosition {
   unitCost: number | null;
   quantity: number;
   baseValue: number;
-  /** P&L in native currency */
+  /** 累计浮动盈亏（原币） */
   pnlNative: number | null;
-  /** P&L rate */
+  /** 累计浮动盈亏（基准币，已折算） */
+  pnlBase: number | null;
+  /** 累计浮动盈亏率 */
   pnlPct: number | null;
+  /** 今日单价涨跌幅 */
+  todayChangePct: number | null;
+  /** 今日盈亏（基准币） */
+  todayPnLBase: number | null;
   /** price history from asset_change: [{date, price}] */
   priceHistory: Array<{ date: string; price: number }>;
 }
@@ -103,7 +109,11 @@ function compact(v: number): string {
   if (abs >= 1e8) return (v / 1e8).toFixed(1) + "亿";
   if (abs >= 1e4) return (v / 1e4).toFixed(1) + "万";
   if (abs >= 1e3) return (v / 1e3).toFixed(1) + "k";
-  return String(v);
+  // 小数点统一只保留一位，避免今日盈亏小金额（个位数）显示长串小数
+  return v.toLocaleString(undefined, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1
+  });
 }
 
 function pctStr(v: number, decimals = 1): string {
@@ -184,7 +194,7 @@ function TotalTrendChart({
 }) {
   const pal = usePalette(isDark);
 
-  const h = tall ? 260 : 120;
+  const h = tall ? 200 : 120;
 
   if (data.length < 2) {
     return (
@@ -271,7 +281,7 @@ function PnLTrendChart({
   tall?: boolean;
 }) {
   const pal = usePalette(isDark);
-  const h = tall ? 260 : 160;
+  const h = tall ? 200 : 160;
 
   if (data.length < 2) {
     return (
@@ -451,46 +461,90 @@ export function SecuritiesPanel({
 
 /* ─────────────── MarketGroupedDetail ─────────────── */
 
-function PositionRow({
-  p,
-  isDark
-}: {
-  p: SecuritiesPosition;
-  isDark: boolean;
-}) {
-  const up = (p.pnlPct ?? 0) >= 0;
-  const hasData = p.pnlPct != null;
+/**
+ * 单行持仓的多列布局。列从左到右：
+ *   名称（含代码）/ 市值 / 今日% / 今日盈亏 / 总% / 总盈亏 / sparkline
+ * 用 CSS grid 保证多行间列对齐。
+ */
+const ROW_GRID =
+  "grid grid-cols-[minmax(0,1fr)_72px_64px_72px_64px_72px_56px] items-center gap-2";
+
+function PositionRow({ p, isDark }: { p: SecuritiesPosition; isDark: boolean }) {
+  const totalUp = (p.pnlPct ?? 0) >= 0;
+  const hasTotal = p.pnlPct != null;
+
+  const hasToday = p.todayChangePct != null;
+  const todayUp = (p.todayChangePct ?? 0) >= 0;
+
+  const colorClass = (up: boolean, has: boolean) =>
+    !has ? "text-ink-400" : up ? "text-gain-700" : "text-loss-700";
+
   return (
-    <div className="flex items-center gap-3 py-2.5 text-[12px]">
-      <div className="flex min-w-0 flex-1 flex-col">
-        <span className="flex items-center gap-1.5 leading-none">
+    <div className={`${ROW_GRID} py-2 text-[12px] leading-tight`}>
+      {/* 名称 + 代码 + 币种 */}
+      <div className="min-w-0">
+        <div className="flex items-center gap-1.5">
           <span className="truncate font-medium text-ink-900">{p.name}</span>
           {p.symbol && (
             <span className="shrink-0 rounded bg-canvas-sunk px-1 py-0.5 font-mono text-[10px] tabular text-ink-500">
               {p.symbol}
             </span>
           )}
-        </span>
-        <span className="mt-0.5 text-[10px] text-ink-400">{p.currency}</span>
+        </div>
+        <div className="mt-0.5 text-[10px] text-ink-400">{p.currency}</div>
       </div>
 
-      <div className="shrink-0 text-right">
-        <div className="tabular font-medium text-ink-800">{compact(p.baseValue)}</div>
-        {hasData && (
-          <div
-            className={`tabular text-[10px] ${up ? "text-gain-700" : "text-loss-700"}`}
-          >
-            {pctStr(p.pnlPct!)}
-          </div>
-        )}
+      {/* 市值 */}
+      <div className="text-right tabular font-medium text-ink-800">
+        {compact(p.baseValue)}
       </div>
 
-      <MiniSparkline
-        history={p.priceHistory}
-        unitCost={p.unitCost}
-        currentPrice={p.currentPrice}
-        isDark={isDark}
-      />
+      {/* 今日 % */}
+      <div className={`text-right tabular ${colorClass(todayUp, hasToday)}`}>
+        {hasToday ? pctStr(p.todayChangePct!, 2) : "—"}
+      </div>
+      {/* 今日 盈亏（基准币） */}
+      <div className={`text-right tabular ${colorClass(todayUp, hasToday)}`}>
+        {hasToday && p.todayPnLBase != null
+          ? (p.todayPnLBase >= 0 ? "+" : "") + compact(p.todayPnLBase)
+          : "—"}
+      </div>
+
+      {/* 总 % */}
+      <div className={`text-right tabular ${colorClass(totalUp, hasTotal)}`}>
+        {hasTotal ? pctStr(p.pnlPct!, 2) : "—"}
+      </div>
+      {/* 总盈亏（基准币） */}
+      <div className={`text-right tabular ${colorClass(totalUp, hasTotal)}`}>
+        {hasTotal && p.pnlBase != null
+          ? (p.pnlBase >= 0 ? "+" : "") + compact(p.pnlBase)
+          : "—"}
+      </div>
+
+      <div className="flex justify-end">
+        <MiniSparkline
+          history={p.priceHistory}
+          unitCost={p.unitCost}
+          currentPrice={p.currentPrice}
+          isDark={isDark}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PositionHeaderRow() {
+  return (
+    <div
+      className={`${ROW_GRID} pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-ink-400`}
+    >
+      <div>名称</div>
+      <div className="text-right">市值</div>
+      <div className="text-right">今日%</div>
+      <div className="text-right">今日</div>
+      <div className="text-right">总%</div>
+      <div className="text-right">总盈亏</div>
+      <div className="text-right">走势</div>
     </div>
   );
 }
@@ -512,17 +566,48 @@ function MarketGroupedDetail({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* 表头：仅展示一次，统一对齐 */}
+      <PositionHeaderRow />
+
       {MARKET_ORDER.map((m) => {
         const list = groups.get(m)!;
         if (list.length === 0) return null;
+        // 当组内任一持仓有数据时，汇总「今日盈亏」「累计盈亏」展示在小标题右侧
+        const todayBaseSum = list.reduce(
+          (s, p) => s + (p.todayPnLBase ?? 0),
+          0
+        );
+        const totalBaseSum = list.reduce((s, p) => s + (p.pnlBase ?? 0), 0);
+        const todayUp = todayBaseSum >= 0;
+        const totalUp = totalBaseSum >= 0;
         return (
           <div key={m}>
             {/* 市场标题行 */}
-            <div className="mb-1 flex items-center gap-2">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+            <div className="mb-0.5 flex items-center gap-2 border-t border-hair pt-2">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
                 {m}
               </span>
               <span className="text-[10px] text-ink-300">{list.length} 只</span>
+              <span className="ml-auto flex items-baseline gap-3 text-[10px]">
+                <span className="text-ink-400">
+                  今日{" "}
+                  <span
+                    className={`tabular font-medium ${todayUp ? "text-gain-700" : "text-loss-700"}`}
+                  >
+                    {todayBaseSum >= 0 ? "+" : ""}
+                    {compact(todayBaseSum)}
+                  </span>
+                </span>
+                <span className="text-ink-400">
+                  累计{" "}
+                  <span
+                    className={`tabular font-medium ${totalUp ? "text-gain-700" : "text-loss-700"}`}
+                  >
+                    {totalBaseSum >= 0 ? "+" : ""}
+                    {compact(totalBaseSum)}
+                  </span>
+                </span>
+              </span>
             </div>
             {/* 持仓列表 */}
             <div className="flex flex-col divide-y divide-hair">

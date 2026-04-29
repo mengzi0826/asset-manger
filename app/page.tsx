@@ -1,19 +1,28 @@
 import Link from "next/link";
 import {
+  Activity,
   AlertCircle,
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
+  CalendarClock,
   CheckCircle2,
   ExternalLink,
+  Percent,
   Plus,
+  TrendingUp,
   Wallet
 } from "lucide-react";
 import { getDB, getSetting } from "@/lib/db";
 import { ensureRates } from "@/lib/fx";
 import { ensureStockPrices } from "@/lib/stocks";
 import { valueAll, type ValuedAsset } from "@/lib/valuation";
-import { ensureTodaySnapshot, listChanges, listSnapshots } from "@/lib/history";
+import {
+  computeTodayStockPnL,
+  ensureTodaySnapshot,
+  listChanges,
+  listSnapshots
+} from "@/lib/history";
 import { buildSuggestions } from "@/lib/advisor";
 import { AllocationChart } from "@/components/charts/AllocationChart";
 import { HistoryChart } from "@/components/charts/HistoryChart";
@@ -51,6 +60,21 @@ export default async function DashboardPage() {
     firstSnap && firstSnap.total_value ? totalSinceStart / firstSnap.total_value : 0;
 
   const kpis = computeKpis(valuation.items);
+
+  // 证券类「今日盈亏」：使用股票接口落库的当日涨跌字段
+  const todaySecPnL = computeTodayStockPnL(
+    valuation.items
+      .filter((a) => a.category_code === "securities")
+      .map((a) => ({
+        id: a.id,
+        currency: a.currency,
+        quantity: a.quantity ?? 0,
+        currentPrice: a.current_price,
+        changeAmount: a.change_amount,
+        changePercent: a.change_percent
+      })),
+    baseCurrency
+  );
 
   // 资产构成图只展示正向资产大类
   const allocationByCategory = Object.fromEntries(
@@ -176,7 +200,7 @@ export default async function DashboardPage() {
         </div>
       </section>
 
-      {/* 资产摘要：从 Hero 提取出来的统计 + 即将到期 */}
+      {/* 资产摘要：把 4 个核心指标拆成独立瓦片 + 即将到期单独成行 */}
       {hasAssets && (
         <section className="card">
           <div className="card-header">
@@ -184,10 +208,18 @@ export default async function DashboardPage() {
             <span className="text-[11px] text-ink-400">以 {baseCurrency} 结算</span>
           </div>
           <div className="card-body space-y-4">
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[12px]">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {firstSnap && (
-                <KpiInline
+                <SummaryTile
+                  icon={<TrendingUp className="h-3.5 w-3.5" />}
                   label="累计变化"
+                  tone={
+                    totalSinceStart > 0
+                      ? "gain"
+                      : totalSinceStart < 0
+                        ? "loss"
+                        : "neutral"
+                  }
                   value={
                     <span className="tabular">
                       {totalSinceStart >= 0 ? "+" : ""}
@@ -197,36 +229,62 @@ export default async function DashboardPage() {
                   hint={<DeltaPill value={totalSinceStart} pct={totalSincePct} />}
                 />
               )}
-              <KpiInline
+              <SummaryTile
+                icon={<Activity className="h-3.5 w-3.5" />}
                 label="浮动盈亏"
+                tone={
+                  kpis.unrealized > 0
+                    ? "gain"
+                    : kpis.unrealized < 0
+                      ? "loss"
+                      : "neutral"
+                }
                 value={
-                  <span
-                    className={`tabular font-medium ${
-                      kpis.unrealized > 0
-                        ? "text-gain-700"
-                        : kpis.unrealized < 0
-                          ? "text-loss-700"
-                          : "text-ink-700"
-                    }`}
-                  >
+                  <span className="tabular">
                     {kpis.unrealized > 0 ? "+" : ""}
                     {formatMoney(kpis.unrealized, baseCurrency)}
                   </span>
                 }
                 hint={
-                  kpis.investedCost > 0 ? (
-                    <span className="tabular">
-                      成本回报 {formatPercent(kpis.unrealized / kpis.investedCost, 2)}
-                    </span>
-                  ) : (
-                    "暂无成本数据"
-                  )
+                  kpis.investedCost > 0
+                    ? `成本回报 ${formatPercent(kpis.unrealized / kpis.investedCost, 2)}`
+                    : "暂无成本数据"
                 }
               />
-              <KpiInline
-                label="加权年化"
+              <SummaryTile
+                icon={<CalendarClock className="h-3.5 w-3.5" />}
+                label="证券今日"
+                tone={
+                  todaySecPnL.perAsset.size === 0
+                    ? "muted"
+                    : todaySecPnL.totalBase > 0
+                      ? "gain"
+                      : todaySecPnL.totalBase < 0
+                        ? "loss"
+                        : "neutral"
+                }
                 value={
-                  <span className="tabular font-medium text-ink-800">
+                  todaySecPnL.perAsset.size > 0 ? (
+                    <span className="tabular">
+                      {todaySecPnL.totalBase > 0 ? "+" : ""}
+                      {formatMoney(todaySecPnL.totalBase, baseCurrency)}
+                    </span>
+                  ) : (
+                    <span className="tabular text-ink-400">—</span>
+                  )
+                }
+                hint={
+                  todaySecPnL.perAsset.size > 0
+                    ? `${todaySecPnL.perAsset.size} 只参与计算`
+                    : "暂无昨日参考价"
+                }
+              />
+              <SummaryTile
+                icon={<Percent className="h-3.5 w-3.5" />}
+                label="加权年化"
+                tone="info"
+                value={
+                  <span className="tabular">
                     {kpis.weightedYield != null
                       ? `${(kpis.weightedYield * 100).toFixed(2)}%`
                       : "—"}
@@ -495,6 +553,68 @@ function KpiInline({
       <span className="text-ink-400">{label}</span>
       <span className="tabular font-medium text-ink-800">{value}</span>
       {hint && <span className="text-ink-400">{hint}</span>}
+    </div>
+  );
+}
+
+/**
+ * 资产摘要里的指标瓦片：左侧一根 2px 语义色条 + 顶部图标&标签 + 主数值 + hint。
+ * tone 对应的色彩语义：
+ *   gain  → 红涨绿跌的「涨」（红）
+ *   loss  → 红涨绿跌的「跌」（绿）
+ *   info  → 中性高亮（金色，强调）
+ *   neutral / muted → 暗淡，不带色
+ */
+function SummaryTile({
+  icon,
+  label,
+  value,
+  hint,
+  tone
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+  hint?: React.ReactNode;
+  tone: "gain" | "loss" | "info" | "neutral" | "muted";
+}) {
+  const accent = {
+    gain: "before:bg-gain-500",
+    loss: "before:bg-loss-500",
+    info: "before:bg-gold-500",
+    neutral: "before:bg-ink-300",
+    muted: "before:bg-ink-200"
+  }[tone];
+  const valueColor = {
+    gain: "text-gain-700",
+    loss: "text-loss-700",
+    info: "text-ink-900",
+    neutral: "text-ink-800",
+    muted: "text-ink-400"
+  }[tone];
+  const iconColor = {
+    gain: "text-gain-600",
+    loss: "text-loss-600",
+    info: "text-gold-500",
+    neutral: "text-ink-400",
+    muted: "text-ink-300"
+  }[tone];
+  return (
+    <div
+      className={`relative overflow-hidden rounded-md border border-hair bg-canvas-sunk/50 px-3.5 py-3 before:absolute before:left-0 before:top-0 before:h-full before:w-[3px] before:rounded-l-md ${accent}`}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className={iconColor}>{icon}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+          {label}
+        </span>
+      </div>
+      <div className={`mt-1.5 text-[18px] font-bold leading-none tabular ${valueColor}`}>
+        {value}
+      </div>
+      {hint && (
+        <div className="mt-1.5 text-[11px] leading-tight text-ink-500">{hint}</div>
+      )}
     </div>
   );
 }

@@ -3,6 +3,19 @@ import { convert } from "./fx";
 import { computeAssetValue, valueAll } from "./valuation";
 import { nowCn, todayCn } from "./time";
 
+/** 单只股票的「今日盈亏」分项数据（来自股票行情接口落库的当日涨跌字段） */
+export interface TodayPnLEntry {
+  assetId: number;
+  /** 单价的今日变化（原币） */
+  todayPriceChange: number;
+  /** 单价的今日涨跌幅（小数：0.0013 = 0.13%） */
+  todayChangePct: number;
+  /** 持仓维度的今日盈亏（原币） */
+  todayPnLNative: number;
+  /** 持仓维度的今日盈亏（基准币） */
+  todayPnLBase: number;
+}
+
 export function logAssetChange(params: {
   action: "create" | "update" | "delete";
   before?: AssetRow | null;
@@ -108,6 +121,73 @@ export function listSecuritiesBreakdown(
       )
       .all(baseCurrency, days) as Array<{ date: string; value: number }>
   ).filter((r) => r.value > 0);
+}
+
+/**
+ * 计算一组持仓的「今日盈亏」。
+ * 算法：直接读取 asset 表里由股票接口落库的 change_amount / change_percent，
+ * 用 change_amount × quantity → 折算到基准币，逐笔累加得到总和。
+ * 缺失 change_amount 但有 change_percent 时，回退用「现价 × 当日变动率」近似。
+ * 两者都缺失（如尚未刷新过价格的新建仓）时该笔不计入。
+ */
+export function computeTodayStockPnL(
+  items: Array<{
+    id: number;
+    currency: string;
+    quantity: number;
+    currentPrice: number | null;
+    changeAmount: number | null;
+    changePercent: number | null;
+  }>,
+  baseCurrency: string
+): { totalBase: number; perAsset: Map<number, TodayPnLEntry> } {
+  const perAsset = new Map<number, TodayPnLEntry>();
+  let totalBase = 0;
+
+  for (const item of items) {
+    const qty = item.quantity ?? 0;
+    if (qty === 0) continue;
+
+    let todayPriceChange: number | null = null;
+    let todayChangePct: number | null = null;
+
+    if (item.changeAmount != null && Number.isFinite(item.changeAmount)) {
+      todayPriceChange = item.changeAmount;
+      todayChangePct =
+        item.changePercent != null && Number.isFinite(item.changePercent)
+          ? item.changePercent
+          : item.currentPrice != null && item.currentPrice - item.changeAmount > 0
+            ? item.changeAmount / (item.currentPrice - item.changeAmount)
+            : null;
+    } else if (
+      item.changePercent != null &&
+      Number.isFinite(item.changePercent) &&
+      item.currentPrice != null
+    ) {
+      // current = prev * (1 + pct) ⇒ prev = current / (1 + pct) ⇒ change = current - prev
+      const denom = 1 + item.changePercent;
+      if (denom !== 0) {
+        const prev = item.currentPrice / denom;
+        todayPriceChange = item.currentPrice - prev;
+        todayChangePct = item.changePercent;
+      }
+    }
+
+    if (todayPriceChange == null) continue;
+
+    const todayPnLNative = todayPriceChange * qty;
+    const todayPnLBase = convert(todayPnLNative, item.currency, baseCurrency) ?? 0;
+    perAsset.set(item.id, {
+      assetId: item.id,
+      todayPriceChange,
+      todayChangePct: todayChangePct ?? 0,
+      todayPnLNative,
+      todayPnLBase
+    });
+    totalBase += todayPnLBase;
+  }
+
+  return { totalBase, perAsset };
 }
 
 /**
