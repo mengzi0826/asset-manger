@@ -37,12 +37,16 @@
 - 解析股票代码的规则全部放在 `parseStockSymbol`，支持 `SH600519` / `600519` / `HK00700` / `00700` / `AAPL` 等；资产表单（`AssetForm`）会把用户输入自动大写并保存到 `asset.symbol`。
 - 接口调用复用 `lib/net.ts:getProxyDispatcher`，走同一 `127.0.0.1:7890` 代理。
 - API：`GET /api/stocks` 返回当前证券列表与下一次计划时间；`GET /api/stocks?refresh=1` 会强制刷新所有持仓股的 `current_price`（UI 在「设置 → 股票价格」页有按钮）。
+- **时间戳**：`lib/time.ts` 的 `nowCn()` / `toCnIso()` 精度到**北京时间整点小时**（`…T14:00:00+08:00`），不写分秒毫秒级差异；展示用 `formatCnDateTime` 与之对齐。
+- **周六日**：`isWeekendBeijing(todayCn())` 为真时，`refreshStockPrices` **直接返回** `skipped: "weekend"`，**不调 Juhe**；总览 / 证券页「今日」相关为 **—**，设置里手动刷新禁用。
+- **今日盈亏**：`computeTodayStockPnL` 仅用落库的 `change_amount` / `change_percent`（不再按 `change_quote_date` 过滤）。`change_quote_date` 仍写入接口解析的会话日，仅作记录。
+- **额度 / 单条失败**：`refreshStockPrices` 里**失败的分支不写 `UPDATE`**，不会把其它标的已有涨跌清空；已去掉「fatal 后整批跳过」逻辑，额度耗尽后**后续标的仍会各请求一次**（可能仍失败，但不影响已成功写入的行）。
 
 ## 拉取节奏小结
 
 - **汇率**：每 **8 小时**一条自动周期；上次拉取见 `fx_rate` 表中 `source != 'manual'` 的 `fetched_at` 最大值。设置页点「刷新」会带 `?refresh=1` 为强制。
 - **股票**：以北京时间 **10:00** 与 **14:00** 为日锚点，一天最多自动补两次（`latestPassedCnStockAnchorMs` / `shouldRefreshStocksBy10And14` / `nextStockAutoRefreshIso`），上次成功尝试见 `last_stocks_refresh_at`。未到当日 10:00 不自动拉。
-- 页面加载时常用：`await ensureRates()` + `await ensureStockPrices()`（见 `app/page.tsx` 等）。
+- 页面加载时常用：`kickoffRatesRefresh()` + `kickoffStockPricesRefresh()` 后台触发（不阻塞 SSR 首屏）；汇率侧另有 `ensureRates()` 等路径，见 `lib/fx.ts` / 各 `page.tsx`。
 
 ### 如果数据没变
 

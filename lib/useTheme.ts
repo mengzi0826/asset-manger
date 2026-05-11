@@ -1,37 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useThemeContext, type Theme } from "./themeContext";
 
-export type Theme = "light" | "dark";
+export type { Theme };
 
 /**
- * 读取和响应 <html> 上的 dark class。
- * 用 MutationObserver 监听 class 变化，确保所有使用该 hook 的组件
- * （尤其是 recharts 图表）在用户切换主题时实时同步颜色。
+ * 读取当前主题（'light' | 'dark'）。
+ *
+ * 实现方式：从 ThemeProvider Context 拿值。
+ * SSR 时由 layout.tsx 通过 cookie 解析出初始值并透传给 Provider，
+ * 因此服务端与客户端首屏完全一致，不再触发 hydration mismatch。
  */
 export function useTheme(): Theme {
-  const [theme, setTheme] = useState<Theme>(() => {
-    if (typeof document === "undefined") return "dark";
-    return document.documentElement.classList.contains("dark") ? "dark" : "light";
-  });
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const update = () =>
-      setTheme(root.classList.contains("dark") ? "dark" : "light");
-    update();
-    const observer = new MutationObserver(update);
-    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
-  }, []);
-
-  return theme;
+  return useThemeContext().theme;
 }
 
-export function setTheme(next: Theme) {
-  const root = document.documentElement;
-  root.classList.toggle("dark", next === "dark");
+/** 直接修改主题。会同步写入 <html class> / localStorage / cookie。 */
+export function setTheme(next: Theme): void {
+  // 兼容旧调用入口：尽量从 ThemeProvider 走
+  // 这里直接操纵 DOM，确保即使在 ThemeProvider 之外（如脚本）调用也能生效
+  if (typeof document === "undefined") return;
+  document.documentElement.classList.toggle("dark", next === "dark");
   try {
     localStorage.setItem("theme", next);
   } catch {}
+  document.cookie = `theme=${next}; Path=/; Max-Age=${60 * 60 * 24 * 365}; SameSite=Lax`;
 }

@@ -172,10 +172,112 @@ body {
 body {
   background-image: var(--page-glow);
   background-attachment: fixed;
+  transition: background-image 200ms ease;
 }
 
 * {
   border-color: rgb(var(--hair));
+}
+
+/* =====================================================================
+   垂直跑马灯（最近变动小条用）
+   - 单行高度由 --row-h 控制，外层 overflow:hidden
+   - 列表渲染两份相同内容首尾相接，translateY(-50%) 无缝循环
+   - 时长由内联 style 传入 animation-duration
+   - hover / focus 时暂停，便于点击查看
+   - prefers-reduced-motion 下自动停止动画（保持静止首屏）
+   ===================================================================== */
+.marquee-v {
+  --row-h: 1.6em;
+  overflow: hidden;
+  position: relative;
+  height: var(--row-h);
+  /* 上下两端淡出，更柔和 */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 25%,
+    black 75%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 25%,
+    black 75%,
+    transparent 100%
+  );
+}
+.marquee-v-track {
+  display: flex;
+  flex-direction: column;
+  animation-name: marquee-up;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-duration: 18s; /* 默认值，会被内联 style 覆盖 */
+  will-change: transform;
+}
+.marquee-v:hover .marquee-v-track,
+.marquee-v:focus-within .marquee-v-track {
+  animation-play-state: paused;
+}
+.marquee-v-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: var(--row-h);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+@keyframes marquee-up {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    /* 列表渲染两份完全相同的内容，滚到一半即与起始相同帧，无缝衔接 */
+    transform: translateY(-50%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .marquee-v-track {
+    animation: none !important;
+  }
+  .marquee-v {
+    -webkit-mask-image: none;
+    mask-image: none;
+    height: auto;
+    max-height: calc(var(--row-h) * 6);
+    overflow-y: auto;
+  }
+}
+
+/* =====================================================================
+   主题切换过渡动画
+   仅对 background-color / color / border-color / fill / stroke 做 180ms 过渡。
+   排除 hover/focus 等高频交互场景（用 transition-property 限制）以避免
+   按钮/输入框 hover 卡顿；不影响 transform / opacity 等动画。
+   prefers-reduced-motion 下自动关闭，尊重无障碍偏好。
+   ===================================================================== */
+@media (prefers-reduced-motion: no-preference) {
+  body,
+  body * {
+    transition-property: background-color, color, border-color, fill, stroke,
+      box-shadow;
+    transition-duration: 180ms;
+    transition-timing-function: ease;
+  }
+  /* 已经定义了显式 transition 的元素（按钮/链接 hover）保持原值 */
+  body .btn-primary,
+  body .btn-outline,
+  body .btn-ghost,
+  body .btn-danger,
+  body .icon-btn,
+  body .input,
+  body .nav-link,
+  body button,
+  body a {
+    transition-duration: 150ms;
+  }
 }
 
 .tabular {

@@ -3,11 +3,14 @@ import { getProxyDispatcher } from "./net";
 import { getDB, getSetting, setSetting, type AssetWithMeta } from "./db";
 import { getJuheStockAppKey } from "./juheKeys";
 import {
+  isWeekendBeijing,
+  juheQuoteSessionYmdFromData,
   latestPassedCnStockAnchorMs,
   nextStockAutoRefreshIso,
   nowCn,
   parseDbDate,
-  shouldRefreshStocksBy10And14
+  shouldRefreshStocksBy10And14,
+  todayCn
 } from "./time";
 
 /**
@@ -16,7 +19,8 @@ import {
  *   - 沪深 A 股（含上证/深证指数）：/finance/stock/hs?gid=sh601009
  *   - 香港股市：/finance/stock/hk?num=00001
  *   - 美国股市：/finance/stock/usa?gid=aapl
- * 数据延迟约数分钟，自动拉取在每日北京时间 10:00 与 14:00 两个锚点各最多一次（见 time.ts）。
+ * 数据延迟约数分钟；自动拉取在每日北京时间 10:00 与 14:00 两个锚点各最多一次（见 time.ts）。
+ * 周六日（北京）不请求行情（见 refreshStockPrices 开头）；`change_quote_date` 仅作接口会话日记录，不参与「今日」展示判定。
  */
 
 const JUHE_STOCK_ENDPOINT: Record<StockMarket, string> = {
@@ -74,7 +78,14 @@ export function hsGidPrefixForSixDigit(code6: string): "sh" | "sz" {
  *   4) 纯字母（可含 . 或 -）→ 美股
  */
 export function parseStockSymbol(rawSymbol: string | null | undefined): StockSymbolInfo | null {
-  const s = (rawSymbol || "").trim().toUpperCase();
+  // 兼容用户从财经站点粘贴的常见前缀/空白：$AAPL、 AAPL.US、AAPL.O、brk.b
+  const s = (rawSymbol || "")
+    .trim()
+    .toUpperCase()
+    .replace(/^\$+/, "")
+    .replace(/\s+/g, "")
+    // 去掉 .US / .O / .N / .OQ / .NSDQ 等后缀（仅美股常见）
+    .replace(/\.(US|O|N|OQ|NSDQ|NYSE|NASDAQ)$/, "");
   if (!s) return null;
 
   if (/^(SH|SZ)\d{6}$/.test(s)) {
@@ -172,8 +183,8 @@ type FetchPriceResult =
       price: number;
       changeAmount: number | null;
       changePercent: number | null;
-      rawTime?: string | number;
-      name?: string | number;
+      /** 接口 `date` / `time` 推断的行情会话日（北京 YYYY-MM-DD） */
+      quoteSessionYmd: string | null;
     }
   | { ok: false; fatal: boolean; error: string };
 
@@ -231,8 +242,7 @@ async function fetchPriceFromJuhe(
       price,
       changeAmount,
       changePercent,
-      rawTime: data.time as string | number | undefined,
-      name: data.name as string | number | undefined
+      quoteSessionYmd: juheQuoteSessionYmdFromData(data as Record<string, unknown>)
     };
   } catch (e: any) {
     const cause = e?.cause;
@@ -276,6 +286,7 @@ export interface StockRefreshResult {
     | "up_to_date"
     | "no_securities"
     | "no_key"
+    | "weekend"
     | null;
   updated_count: number;
   failed_count: number;
@@ -343,6 +354,12 @@ function listSecuritiesWithSymbol(): AssetWithMeta[] {
 }
 
 /**
+ * 模块级内存锁：同一进程内只允许一次刷新并发执行。
+ * 多页面同时触发 kickoffStockPricesRefresh 时，后续调用直接跳过，不重复调接口。
+ */
+let refreshInFlight = false;
+
+/**
  * 刷新所有证券类资产的 current_price。
  * - 自动：需已过当日第一个锚点 10:00，且 10/14 点对应的「本阶段」尚未拉取
  * - 强制：只校验已配置「股票数据」用 AppKey
@@ -352,6 +369,18 @@ export async function refreshStockPrices(
 ): Promise<StockRefreshResult> {
   const lastRefreshedAt = getSetting("last_stocks_refresh_at");
   const next_refresh_at = nextStockAutoRefreshIso();
+
+  if (refreshInFlight) {
+    return {
+      last_refreshed_at: lastRefreshedAt,
+      next_refresh_at,
+      skipped: "up_to_date",
+      updated_count: 0,
+      failed_count: 0,
+      items: []
+    };
+  }
+
   const appkey = getJuheStockAppKey();
 
   if (!appkey) {
@@ -363,6 +392,17 @@ export async function refreshStockPrices(
       failed_count: 0,
       error:
         "请先在「设置」中配置股票价格 AppKey，或使用环境变量 JUHE_STOCK_APPKEY",
+      items: []
+    };
+  }
+
+  if (isWeekendBeijing(todayCn())) {
+    return {
+      last_refreshed_at: lastRefreshedAt,
+      next_refresh_at,
+      skipped: "weekend",
+      updated_count: 0,
+      failed_count: 0,
       items: []
     };
   }
@@ -402,12 +442,17 @@ export async function refreshStockPrices(
     };
   }
 
+  refreshInFlight = true;
+  try {
+
   const db = getDB();
+  /** 单条失败或接口额度错误不会 UPDATE 该行，不会清空已有涨跌；仅成功分支覆盖写入。 */
   const updateStmt = db.prepare(
     `UPDATE asset
        SET current_price = ?,
            change_amount = ?,
            change_percent = ?,
+           change_quote_date = ?,
            updated_at = ?
        WHERE id = ?`
   );
@@ -415,8 +460,6 @@ export async function refreshStockPrices(
   const items: StockRefreshItem[] = [];
   let updatedCount = 0;
   let failedCount = 0;
-  let fatalHit = false;
-  let fatalReason: string | undefined;
 
   for (const asset of assets) {
     const info = parseStockSymbol(asset.symbol);
@@ -445,17 +488,19 @@ export async function refreshStockPrices(
       items.push(base);
       continue;
     }
-    if (fatalHit) {
-      base.error = fatalReason ?? "接口额度不足，已跳过";
-      failedCount++;
-      items.push(base);
-      continue;
-    }
-
     const r = await fetchPriceFromJuhe(info, appkey);
     if (r.ok) {
       const now = nowCn();
-      updateStmt.run(r.price, r.changeAmount, r.changePercent, now, asset.id);
+      // 强约束：change_quote_date 不允许为空；接口解析失败时回落到今天
+      const quoteToStore = r.quoteSessionYmd ?? todayCn();
+      updateStmt.run(
+        r.price,
+        r.changeAmount,
+        r.changePercent,
+        quoteToStore,
+        now,
+        asset.id
+      );
       base.fetched_price = r.price;
       base.current_price = r.price;
       base.change_amount = r.changeAmount;
@@ -466,10 +511,6 @@ export async function refreshStockPrices(
     } else {
       base.error = r.error;
       failedCount++;
-      if (r.fatal) {
-        fatalHit = true;
-        fatalReason = r.error;
-      }
     }
     items.push(base);
   }
@@ -487,10 +528,14 @@ export async function refreshStockPrices(
     failed_count: failedCount,
     error:
       updatedCount === 0 && failedCount > 0
-        ? fatalReason ?? items.find((i) => i.error)?.error ?? "股票价格刷新失败"
+        ? items.find((i) => i.error)?.error ?? "股票价格刷新失败"
         : undefined,
     items
   };
+
+  } finally {
+    refreshInFlight = false;
+  }
 }
 
 export async function ensureStockPrices() {
@@ -499,6 +544,16 @@ export async function ensureStockPrices() {
   } catch (e) {
     console.error("[stocks] ensure failed:", e);
   }
+}
+
+/**
+ * 非阻塞版：触发后台刷新但立即返回，不阻塞 SSR 首屏。
+ * 第一次访问（DB 中无价格）时页面会用旧数据/空数据，下次刷新即可看到最新价格。
+ */
+export function kickoffStockPricesRefresh(): void {
+  refreshStockPrices({ force: false }).catch((e) => {
+    console.warn("[stocks] background refresh failed:", e?.message ?? e);
+  });
 }
 
 /** 读取上次刷新时间（用于设置页在未触发刷新时也能展示） */

@@ -67,16 +67,43 @@ export async function POST(req: Request) {
       }
       if (parsed.asset) {
         const stmt = db.prepare(
-          `INSERT INTO asset (id, account_id, name, currency, quantity, unit_cost, current_price, amount, annual_rate, start_date, maturity_date, notes, created_at, updated_at)
-           VALUES (@id, @account_id, @name, @currency, @quantity, @unit_cost, @current_price, @amount, @annual_rate, @start_date, @maturity_date, @notes, @created_at, @updated_at)
+          `INSERT INTO asset (id, account_id, name, symbol, currency, quantity,
+                              unit_cost, current_price, change_amount, change_percent,
+                              change_updated_at, change_quote_date, amount, annual_rate, start_date,
+                              maturity_date, notes, created_at, updated_at)
+           VALUES (@id, @account_id, @name, @symbol, @currency, @quantity,
+                   @unit_cost, @current_price, @change_amount, @change_percent,
+                   @change_updated_at, @change_quote_date, @amount, @annual_rate, @start_date,
+                   @maturity_date, @notes, @created_at, @updated_at)
            ON CONFLICT(id) DO UPDATE SET
-             account_id=excluded.account_id, name=excluded.name, currency=excluded.currency,
-             quantity=excluded.quantity, unit_cost=excluded.unit_cost, current_price=excluded.current_price,
-             amount=excluded.amount, annual_rate=excluded.annual_rate, start_date=excluded.start_date,
-             maturity_date=excluded.maturity_date, notes=excluded.notes, updated_at=excluded.updated_at`
+             account_id=excluded.account_id, name=excluded.name, symbol=excluded.symbol,
+             currency=excluded.currency, quantity=excluded.quantity,
+             unit_cost=excluded.unit_cost, current_price=excluded.current_price,
+             change_amount=excluded.change_amount, change_percent=excluded.change_percent,
+             change_updated_at=excluded.change_updated_at,
+             change_quote_date=excluded.change_quote_date, amount=excluded.amount,
+             annual_rate=excluded.annual_rate, start_date=excluded.start_date,
+             maturity_date=excluded.maturity_date, notes=excluded.notes,
+             updated_at=excluded.updated_at`
         );
         for (const r of parsed.asset)
-          stmt.run({ created_at: null, updated_at: null, amount: null, annual_rate: null, start_date: null, maturity_date: null, notes: null, unit_cost: null, current_price: null, ...r });
+          stmt.run({
+            symbol: null,
+            change_amount: null,
+            change_percent: null,
+            change_updated_at: null,
+            change_quote_date: null,
+            unit_cost: null,
+            current_price: null,
+            amount: null,
+            annual_rate: null,
+            start_date: null,
+            maturity_date: null,
+            notes: null,
+            created_at: null,
+            updated_at: null,
+            ...r
+          });
       }
       if (parsed.fx_rate) {
         const stmt = db.prepare(

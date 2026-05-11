@@ -46,6 +46,18 @@ function migrateSchema(db: Database.Database) {
   if (!names.has("change_percent")) {
     db.exec("ALTER TABLE asset ADD COLUMN change_percent REAL");
   }
+  if (!names.has("change_updated_at")) {
+    db.exec("ALTER TABLE asset ADD COLUMN change_updated_at TEXT");
+  }
+  if (!names.has("change_quote_date")) {
+    db.exec("ALTER TABLE asset ADD COLUMN change_quote_date TEXT");
+  }
+  // 历史数据修复：确保 change_quote_date 非空（已有行回填为 updated_at 的日期部分）
+  db.exec(
+    `UPDATE asset
+     SET change_quote_date = COALESCE(change_quote_date, substr(updated_at, 1, 10), substr(created_at, 1, 10))
+     WHERE change_quote_date IS NULL OR TRIM(change_quote_date) = ''`
+  );
 }
 
 function seedCategories(db: Database.Database) {
@@ -80,7 +92,10 @@ function seedSettings(db: Database.Database) {
 export function getDB(): Database.Database {
   if (!globalThis.__sqlite_db) {
     globalThis.__sqlite_db = initDB();
+    return globalThis.__sqlite_db;
   }
+  // 开发态/HMR 下进程可长期存活，代码更新后要确保新迁移也会补到旧连接上。
+  migrateSchema(globalThis.__sqlite_db);
   return globalThis.__sqlite_db;
 }
 
@@ -122,6 +137,10 @@ export interface AssetRow {
   change_amount: number | null;
   /** 当日涨跌幅（小数，0.0013 = 0.13%） */
   change_percent: number | null;
+  /** 历史兼容字段：早期用它判定"今日"；现逻辑改为以 change_quote_date 为准 */
+  change_updated_at: string | null;
+  /** 接口 `data.date`（优先）/ `time` 对应的北京日期 YYYY-MM-DD；与 todayCn() 不一致时「今日% / 今日盈亏」应为 — */
+  change_quote_date: string | null;
   amount: number | null;
   annual_rate: number | null;
   start_date: string | null;

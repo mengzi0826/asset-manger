@@ -254,3 +254,13 @@ export async function refreshRates(force = false): Promise<RefreshRatesResult> {
 export async function ensureRates() {
   await refreshRates(false).catch(() => {});
 }
+
+/**
+ * 非阻塞版：触发后台刷新但立即返回，不阻塞 SSR 首屏。
+ * 失败会吞掉，仅打印日志。
+ */
+export function kickoffRatesRefresh(): void {
+  refreshRates(false).catch((e) => {
+    console.warn("[fx] background refresh failed:", e?.message ?? e);
+  });
+}

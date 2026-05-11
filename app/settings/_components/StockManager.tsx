@@ -46,9 +46,41 @@ export function StockManager({ items, lastRefreshedAt, nextRefreshAt }: Props) {
     setResult(null);
     try {
       const res = await fetch("/api/stocks?refresh=1", { method: "GET" });
-      const j = (await res.json()) as {
+      const raw = await res.text();
+      type StocksApiResponse = {
+        error?: string;
         refresh: StockRefreshResult | null;
       };
+      let j: StocksApiResponse | null = null;
+      if (raw.trim()) {
+        try {
+          j = JSON.parse(raw) as StocksApiResponse;
+        } catch {
+          setMsg({
+            text: `服务器返回非 JSON（HTTP ${res.status}），请查看终端或部署日志`,
+            tone: "error"
+          });
+          start(() => router.refresh());
+          return;
+        }
+      }
+      if (!j) {
+        setMsg({
+          text: `无响应内容（HTTP ${res.status}），多为请求超时或连接中断；持仓较多时请稍后再试或缩短刷新间隔`,
+          tone: "error"
+        });
+        start(() => router.refresh());
+        return;
+      }
+      if (!res.ok) {
+        setMsg({
+          text: j.error ?? `请求失败（HTTP ${res.status}）`,
+          tone: "error"
+        });
+        if (j.refresh) setResult(j.refresh);
+        start(() => router.refresh());
+        return;
+      }
       const r = j.refresh;
       setResult(r);
       if (r?.error) {

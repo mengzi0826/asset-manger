@@ -29,11 +29,15 @@ interface AccountKey {
 export function AssetsTable({
   items,
   baseCurrency,
-  total
+  totalAssets,
+  totalLiabilities
 }: {
   items: ValuedAsset[];
   baseCurrency: string;
-  total: number;
+  /** 全局总资产（不含负债），作为非负债行的占比分母 */
+  totalAssets: number;
+  /** 全局总负债（正数），作为负债行的占比分母 */
+  totalLiabilities: number;
 }) {
   const [selectedCurrencies, setSelectedCurrencies] = useState<string[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
@@ -75,7 +79,13 @@ export function AssetsTable({
     });
   }, [items, selectedCurrencies, selectedAccountIds]);
 
-  const filteredTotal = filtered.reduce((s, a) => s + a.base_value, 0);
+  const filteredAssetTotal = filtered
+    .filter((a) => a.category_code !== "liability")
+    .reduce((s, a) => s + a.base_value, 0);
+  const filteredLiabTotal = filtered
+    .filter((a) => a.category_code === "liability")
+    .reduce((s, a) => s + a.base_value, 0);
+  const filteredTotal = filteredAssetTotal - filteredLiabTotal;
   const hasFilter =
     selectedCurrencies.length > 0 || selectedAccountIds.length > 0;
 
@@ -179,18 +189,38 @@ export function AssetsTable({
             </span>{" "}
             / {items.length} 笔
           </span>
-          <span>
-            小计估值{" "}
-            <span className="font-medium text-ink-900 tabular">
-              {formatMoney(filteredTotal, baseCurrency)}
+          {filteredAssetTotal > 0 && (
+            <span>
+              资产小计{" "}
+              <span className="font-medium text-ink-900 tabular">
+                {formatMoney(filteredAssetTotal, baseCurrency)}
+              </span>
+              {totalAssets > 0 && (
+                <span className="ml-1 text-ink-400">
+                  · 占总资产{" "}
+                  <span className="tabular">
+                    {formatPercent(filteredAssetTotal / totalAssets)}
+                  </span>
+                </span>
+              )}
             </span>
-          </span>
-          <span>
-            占当前分类{" "}
-            <span className="font-medium text-ink-900 tabular">
-              {formatPercent(total ? filteredTotal / total : 0)}
+          )}
+          {filteredLiabTotal > 0 && (
+            <span>
+              负债小计{" "}
+              <span className="font-medium text-loss-700 tabular">
+                -{formatMoney(filteredLiabTotal, baseCurrency)}
+              </span>
+              {totalLiabilities > 0 && (
+                <span className="ml-1 text-ink-400">
+                  · 占总负债{" "}
+                  <span className="tabular">
+                    {formatPercent(filteredLiabTotal / totalLiabilities)}
+                  </span>
+                </span>
+              )}
             </span>
-          </span>
+          )}
         </div>
       )}
 
@@ -228,7 +258,10 @@ export function AssetsTable({
             </thead>
             <tbody>
               {filtered.map((a) => {
-                const pct = total ? a.base_value / total : 0;
+                const isLiability = a.category_code === "liability";
+                // B1: 负债行用「占总负债」做分母；非负债行用「占总资产」
+                const denom = isLiability ? totalLiabilities : totalAssets;
+                const pct = denom ? a.base_value / denom : 0;
                 const gain = a.profit_rate;
                 return (
                   <tr key={a.id} className="group">
@@ -258,11 +291,22 @@ export function AssetsTable({
                     <td className="tabular text-right">
                       {formatMoney(a.native_value, a.currency, 2)}
                     </td>
-                    <td className="tabular text-right font-medium text-ink-900">
+                    <td
+                      className={`tabular text-right font-medium ${
+                        isLiability ? "text-loss-700" : "text-ink-900"
+                      }`}
+                    >
+                      {isLiability ? "-" : ""}
                       {formatMoney(a.base_value, baseCurrency)}
                     </td>
                     <td className="tabular text-right text-ink-500">
-                      {formatPercent(pct)}
+                      {pct === 0 ? (
+                        <span className="text-ink-300">—</span>
+                      ) : (
+                        <span title={isLiability ? "占总负债" : "占总资产"}>
+                          {formatPercent(pct)}
+                        </span>
+                      )}
                     </td>
                     <td className="text-right">
                       {gain == null ? (

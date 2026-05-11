@@ -82,12 +82,39 @@ export function AssetForm({
   const [form, setForm] = useState<FormState>(() =>
     rowToForm(initial, accounts[0]?.id ?? 0)
   );
+  /**
+   * 标记 currency / symbol 是否被「证券查询」自动填充过且用户尚未手动覆盖。
+   * 切换账户到非 securities 类时，这种"残留的 USD/HKD"应当被自动清掉，
+   * 避免在现金类账户里默默挂着一个 USD 货币。
+   */
+  const [lookupAutoFilled, setLookupAutoFilled] = useState(false);
 
   const currentAccount = accounts.find((a) => a.id === form.account_id);
   const currentCategory = currentAccount
     ? categories.find((c) => c.id === currentAccount.category_id)
     : null;
   const code: CategoryCode = (currentCategory?.code as CategoryCode) ?? "other";
+
+  function handleAccountChange(nextAccountId: number) {
+    const nextAcc = accounts.find((a) => a.id === nextAccountId);
+    const nextCat = nextAcc
+      ? categories.find((c) => c.id === nextAcc.category_id)
+      : null;
+    const nextCode = (nextCat?.code as CategoryCode) ?? "other";
+    setForm((f) => {
+      let { currency, symbol } = f;
+      // 切到非证券类：股票代码字段无意义，直接清掉
+      if (nextCode !== "securities" && symbol) {
+        symbol = "";
+      }
+      // 切到非证券类，且 currency 是查询自动填充而来的 → 重置为 CNY
+      if (nextCode !== "securities" && lookupAutoFilled) {
+        currency = "CNY";
+      }
+      return { ...f, account_id: nextAccountId, currency, symbol };
+    });
+    setLookupAutoFilled(false);
+  }
 
   // 证券/股票按"份额 × 价格"记账；其余（现金/存款/基金/加密货币/负债/其他）直接记总金额。
   const showQuantityPrice = code === "securities";
@@ -174,14 +201,15 @@ export function AssetForm({
         <div className="card-body space-y-4">
           {code === "securities" && (
             <SecurityLookup
-              onPick={(item) =>
+              onPick={(item) => {
                 setForm((f) => ({
                   ...f,
                   name: item.name,
                   symbol: item.code,
                   currency: item.currency
-                }))
-              }
+                }));
+                setLookupAutoFilled(true);
+              }}
             />
           )}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -189,7 +217,7 @@ export function AssetForm({
               <select
                 className="input"
                 value={form.account_id}
-                onChange={(e) => setForm({ ...form, account_id: Number(e.target.value) })}
+                onChange={(e) => handleAccountChange(Number(e.target.value))}
               >
                 {categories.map((c) => {
                   const list = accountsByCategory[c.id] ?? [];
@@ -219,7 +247,10 @@ export function AssetForm({
               <select
                 className="input tabular"
                 value={form.currency}
-                onChange={(e) => setForm({ ...form, currency: e.target.value })}
+                onChange={(e) => {
+                  setForm({ ...form, currency: e.target.value });
+                  setLookupAutoFilled(false);
+                }}
               >
                 {SUPPORTED_CURRENCIES.map((c) => (
                   <option key={c} value={c}>
@@ -236,9 +267,10 @@ export function AssetForm({
                   className="input tabular"
                   placeholder="AAPL / 00700 / 600519"
                   value={form.symbol}
-                  onChange={(e) =>
-                    setForm({ ...form, symbol: e.target.value.toUpperCase() })
-                  }
+                  onChange={(e) => {
+                    setForm({ ...form, symbol: e.target.value.toUpperCase() });
+                    setLookupAutoFilled(false);
+                  }}
                 />
               </Field>
             </div>

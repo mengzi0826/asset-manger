@@ -6,14 +6,23 @@ import { nowCn } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
-const nullableNumber = z
-  .union([z.number(), z.string(), z.null()])
-  .transform((v) => {
-    if (v === null || v === undefined || v === "") return null;
-    const n = typeof v === "number" ? v : Number(v);
-    return Number.isFinite(n) ? n : null;
-  })
-  .nullable();
+function makeNullableNumber(min?: number) {
+  return z
+    .union([z.number(), z.string(), z.null()])
+    .transform((v) => {
+      if (v === null || v === undefined || v === "") return null;
+      const n = typeof v === "number" ? v : Number(v);
+      return Number.isFinite(n) ? n : null;
+    })
+    .refine(
+      (v) => v == null || min === undefined || v >= min,
+      min !== undefined ? `数值不能小于 ${min}` : "数值无效"
+    )
+    .nullable();
+}
+
+const nullableNumber = makeNullableNumber();
+const nullableNonNegative = makeNullableNumber(0);
 
 const nullableString = z
   .union([z.string(), z.null()])
@@ -30,9 +39,9 @@ const patchSchema = z.object({
     .transform((v) => Number(v))
     .refine((v) => Number.isFinite(v) && v >= 0, "份额/数量无效")
     .optional(),
-  unit_cost: nullableNumber.optional(),
-  current_price: nullableNumber.optional(),
-  amount: nullableNumber.optional(),
+  unit_cost: nullableNonNegative.optional(),
+  current_price: nullableNonNegative.optional(),
+  amount: nullableNonNegative.optional(),
   annual_rate: nullableNumber.optional(),
   start_date: nullableString.optional(),
   maturity_date: nullableString.optional(),

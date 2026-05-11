@@ -2,8 +2,8 @@ import Link from "next/link";
 import { Plus } from "lucide-react";
 import { getDB, getSetting, type Account, type Category, type CategoryCode } from "@/lib/db";
 import { valueAll } from "@/lib/valuation";
-import { ensureRates } from "@/lib/fx";
-import { ensureStockPrices } from "@/lib/stocks";
+import { kickoffRatesRefresh } from "@/lib/fx";
+import { kickoffStockPricesRefresh } from "@/lib/stocks";
 import { AccountManager } from "./_components/AccountManager";
 import { CategoryTabs } from "./_components/CategoryTabs";
 import { AssetsTable } from "./_components/AssetsTable";
@@ -15,8 +15,8 @@ interface PageProps {
 }
 
 export default async function AssetsPage({ searchParams }: PageProps) {
-  await ensureRates();
-  await ensureStockPrices();
+  kickoffRatesRefresh();
+  kickoffStockPricesRefresh();
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   const db = getDB();
   const categories = db
@@ -25,7 +25,8 @@ export default async function AssetsPage({ searchParams }: PageProps) {
   const accounts = db
     .prepare("SELECT * FROM account ORDER BY name")
     .all() as Account[];
-  const { items, total, byCategory } = valueAll(baseCurrency);
+  const { items, total, totalAssets, totalLiabilities, byCategory } =
+    valueAll(baseCurrency);
 
   const activeCat = (searchParams?.cat ?? "all") as string;
   const filtered =
@@ -72,7 +73,12 @@ export default async function AssetsPage({ searchParams }: PageProps) {
             先在上方创建账户后再添加资产。
           </div>
         ) : (
-          <AssetsTable items={filtered} baseCurrency={baseCurrency} total={total} />
+          <AssetsTable
+            items={filtered}
+            baseCurrency={baseCurrency}
+            totalAssets={totalAssets}
+            totalLiabilities={totalLiabilities}
+          />
         )}
       </div>
     </div>

@@ -14,8 +14,8 @@ import {
   Wallet
 } from "lucide-react";
 import { getDB, getSetting } from "@/lib/db";
-import { ensureRates } from "@/lib/fx";
-import { ensureStockPrices } from "@/lib/stocks";
+import { kickoffRatesRefresh } from "@/lib/fx";
+import { kickoffStockPricesRefresh } from "@/lib/stocks";
 import { valueAll, type ValuedAsset } from "@/lib/valuation";
 import {
   computeTodayStockPnL,
@@ -32,13 +32,14 @@ import { formatDate, formatMoney, formatPercent, formatCnDateTime } from "@/lib/
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  await ensureRates();
-  await ensureStockPrices();
+  // 后台刷新：不阻塞首屏。首次访问时会显示旧/空数据，下次访问即更新。
+  kickoffRatesRefresh();
+  kickoffStockPricesRefresh();
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   const valuation = valueAll(baseCurrency);
   ensureTodaySnapshot(baseCurrency);
   const snapshots = listSnapshots(baseCurrency, 365);
-  const recentChanges = listChanges(6);
+  const recentChanges = listChanges(8);
   const suggestions = buildSuggestions({
     items: valuation.items,
     total: valuation.total,
@@ -61,18 +62,22 @@ export default async function DashboardPage() {
 
   const kpis = computeKpis(valuation.items);
 
-  // 证券类「今日盈亏」：使用股票接口落库的当日涨跌字段
+  const secForTodayKpi = valuation.items.filter(
+    (a) => a.category_code === "securities" && (a.quantity ?? 0) > 0
+  );
+  const hasSecuritiesForKpi = secForTodayKpi.length > 0;
+
+  // 证券今日：computeTodayStockPnL 仅统计 change_quote_date 为今天的标的
   const todaySecPnL = computeTodayStockPnL(
-    valuation.items
-      .filter((a) => a.category_code === "securities")
-      .map((a) => ({
-        id: a.id,
-        currency: a.currency,
-        quantity: a.quantity ?? 0,
-        currentPrice: a.current_price,
-        changeAmount: a.change_amount,
-        changePercent: a.change_percent
-      })),
+    secForTodayKpi.map((a) => ({
+      id: a.id,
+      currency: a.currency,
+      quantity: a.quantity ?? 0,
+      currentPrice: a.current_price,
+      changeAmount: a.change_amount,
+      changePercent: a.change_percent,
+      changeQuoteDate: a.change_quote_date
+    })),
     baseCurrency
   );
 
@@ -176,6 +181,53 @@ export default async function DashboardPage() {
             </div>
           </div>
 
+          {/* 最近变动：单行垂直跑马灯（每条 ~2.8s 停留，hover 暂停） */}
+          {recentChanges.length > 0 && (
+            <div className="flex items-center gap-3 border-t border-hair pt-3 text-[12px]">
+              <span className="shrink-0 text-[11px] font-medium uppercase tracking-wider text-ink-400">
+                最近变动
+              </span>
+              {recentChanges.length === 1 ? (
+                // 仅 1 条无需滚动，直接静态展示
+                <div className="flex-1 min-w-0 truncate">
+                  <RecentChangeRow c={recentChanges[0]} />
+                </div>
+              ) : (
+                <div
+                  className="marquee-v flex-1 min-w-0"
+                  aria-label="最近变动滚动列表，鼠标悬停可暂停"
+                  tabIndex={0}
+                >
+                  <ul
+                    className="marquee-v-track"
+                    style={{
+                      animationDuration: `${Math.max(
+                        recentChanges.length * 2.8,
+                        12
+                      )}s`
+                    }}
+                  >
+                    {/* 渲染两份首尾相接，配合 translateY(-50%) 无缝循环 */}
+                    {[...recentChanges, ...recentChanges].map((c, i) => (
+                      <li
+                        key={`${c.id}-${i}`}
+                        className="marquee-v-row"
+                        aria-hidden={i >= recentChanges.length || undefined}
+                      >
+                        <RecentChangeRow c={c} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <Link
+                href="/history"
+                className="shrink-0 text-[11px] text-ink-500 hover:text-gold-500"
+              >
+                查看全部
+              </Link>
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-hair pt-3 text-[11px] text-ink-400">
             <span>
               共 {valuation.items.length} 笔资产 · {accountCount} 个账户
@@ -255,16 +307,18 @@ export default async function DashboardPage() {
                 icon={<CalendarClock className="h-3.5 w-3.5" />}
                 label="证券今日"
                 tone={
-                  todaySecPnL.perAsset.size === 0
+                  !hasSecuritiesForKpi
                     ? "muted"
-                    : todaySecPnL.totalBase > 0
-                      ? "gain"
-                      : todaySecPnL.totalBase < 0
-                        ? "loss"
-                        : "neutral"
+                    : todaySecPnL.perAsset.size === 0
+                      ? "neutral"
+                      : todaySecPnL.totalBase > 0
+                        ? "gain"
+                        : todaySecPnL.totalBase < 0
+                          ? "loss"
+                          : "neutral"
                 }
                 value={
-                  todaySecPnL.perAsset.size > 0 ? (
+                  hasSecuritiesForKpi ? (
                     <span className="tabular">
                       {todaySecPnL.totalBase > 0 ? "+" : ""}
                       {formatMoney(todaySecPnL.totalBase, baseCurrency)}
@@ -274,9 +328,9 @@ export default async function DashboardPage() {
                   )
                 }
                 hint={
-                  todaySecPnL.perAsset.size > 0
-                    ? `${todaySecPnL.perAsset.size} 只参与计算`
-                    : "暂无昨日参考价"
+                  hasSecuritiesForKpi
+                    ? `${todaySecPnL.perAsset.size} 只`
+                    : "暂无证券持仓（或份额均为 0）"
                 }
               />
               <SummaryTile
@@ -336,42 +390,6 @@ export default async function DashboardPage() {
         </section>
       )}
 
-      {/* 资产构成（拉通一整行） */}
-      <section className="card">
-        <div className="card-header gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="card-title shrink-0">资产构成</div>
-            {hasAssets && (
-              <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                <AllocationStat
-                  label="现金等价物"
-                  value={kpis.liquidity}
-                  total={totalAssets}
-                  currency={baseCurrency}
-                />
-                <AllocationStat
-                  label="投资类"
-                  value={kpis.invested}
-                  total={totalAssets}
-                  currency={baseCurrency}
-                  hint="基金/股票/其他"
-                />
-              </div>
-            )}
-          </div>
-          <Link
-            href="/assets"
-            className="inline-flex shrink-0 items-center gap-1 text-[11px] text-ink-500 hover:text-gold-500"
-          >
-            查看明细
-            <ExternalLink className="h-3 w-3" />
-          </Link>
-        </div>
-        <div className="card-body">
-          <AllocationChart data={allocationByCategory} currency={baseCurrency} total={totalAssets} />
-        </div>
-      </section>
-
       {valuation.missingRates.length > 0 && (
         <div className="flex items-start gap-2 rounded-md border border-gold-200 bg-gold-100 px-4 py-3 text-[13px] text-gold-700">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -383,24 +401,67 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {/* 净值走势 */}
-      <section className="card">
-        <div className="card-header">
-          <div className="flex items-center gap-3">
-            <div className="card-title">净值走势</div>
-            <span className="chip tabular">以 {baseCurrency} 结算</span>
-          </div>
-          <div className="flex items-center gap-3 text-[11px] text-ink-400">
-            <span>{snapshots.length} 个历史点</span>
-            <Link href="/history" className="text-gold-500 hover:text-gold-600">
-              查看全部
+      {/* 资产构成 + 净值走势 左右双列（仿照证券页布局） */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 xl:items-stretch">
+        {/* 左：资产构成 */}
+        <section className="card flex flex-col">
+          <div className="card-header gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="card-title shrink-0">资产构成</div>
+              {hasAssets && (
+                <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                  <AllocationStat
+                    label="现金等价物"
+                    value={kpis.liquidity}
+                    total={totalAssets}
+                    currency={baseCurrency}
+                  />
+                  <AllocationStat
+                    label="投资类"
+                    value={kpis.invested}
+                    total={totalAssets}
+                    currency={baseCurrency}
+                    hint="基金/股票/其他"
+                  />
+                </div>
+              )}
+            </div>
+            <Link
+              href="/assets"
+              className="inline-flex shrink-0 items-center gap-1 text-[11px] text-ink-500 hover:text-gold-500"
+            >
+              查看明细
+              <ExternalLink className="h-3 w-3" />
             </Link>
           </div>
-        </div>
-        <div className="card-body">
-          <HistoryChart data={snapshots} currency={baseCurrency} />
-        </div>
-      </section>
+          <div className="card-body flex-1">
+            <AllocationChart
+              data={allocationByCategory}
+              currency={baseCurrency}
+              total={totalAssets}
+            />
+          </div>
+        </section>
+
+        {/* 右：净值走势 */}
+        <section className="card flex flex-col">
+          <div className="card-header">
+            <div className="flex items-center gap-3">
+              <div className="card-title">净值走势</div>
+              <span className="chip tabular">以 {baseCurrency} 结算</span>
+            </div>
+            <div className="flex items-center gap-3 text-[11px] text-ink-400">
+              <span>{snapshots.length} 个历史点</span>
+              <Link href="/history" className="text-gold-500 hover:text-gold-600">
+                查看全部
+              </Link>
+            </div>
+          </div>
+          <div className="card-body flex-1">
+            <HistoryChart data={snapshots} currency={baseCurrency} />
+          </div>
+        </section>
+      </div>
 
       {/* 智能建议（独占一行） */}
       <section className="card">
@@ -445,44 +506,6 @@ export default async function DashboardPage() {
               </div>
             </div>
           ))}
-        </div>
-      </section>
-
-      {/* 最近变动（独占一行） */}
-      <section className="card">
-        <div className="card-header">
-          <div className="card-title">最近变动</div>
-          <Link href="/history" className="text-[11px] text-ink-500 hover:text-gold-500">
-            查看全部
-          </Link>
-        </div>
-        <div className="card-body">
-          {recentChanges.length === 0 ? (
-            <EmptyHint label="暂无变动记录" />
-          ) : (
-            <ul className="divide-y divide-hair">
-              {recentChanges.map((c) => (
-                <li key={c.id} className="flex items-center justify-between py-2.5 text-[13px]">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <ActionDot action={c.action} />
-                    <div className="min-w-0">
-                      <div className="truncate font-medium text-ink-800">
-                        {c.asset_name ?? "-"}
-                      </div>
-                      <div className="text-[11px] text-ink-400">
-                        {formatCnDateTime(c.created_at)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="tabular text-ink-700">
-                    {c.base_value_cny != null
-                      ? formatMoney(c.base_value_cny, "CNY")
-                      : "—"}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
       </section>
 
@@ -677,6 +700,42 @@ function AllocationStat({
   );
 }
 
+/**
+ * "最近变动"单行内容（用于 Hero 底部跑马灯 / 单条静态展示）。
+ * 抽离的目的：在 marquee 渲染两份相同 list 时复用同一份 DOM 描述。
+ */
+function RecentChangeRow({
+  c
+}: {
+  c: {
+    id: number;
+    action: string;
+    asset_name: string | null;
+    base_value_cny: number | null;
+    created_at: string;
+  };
+}) {
+  return (
+    <>
+      <ActionDot action={c.action} />
+      <span className="font-medium text-ink-800">{c.asset_name ?? "-"}</span>
+      {c.base_value_cny != null && (
+        <span
+          className={`tabular ${
+            c.base_value_cny < 0 ? "text-loss-700" : "text-ink-500"
+          }`}
+        >
+          {c.base_value_cny < 0 ? "-" : ""}
+          {formatMoney(Math.abs(c.base_value_cny), "CNY")}
+        </span>
+      )}
+      <span className="text-ink-400">
+        · {formatCnDateTime(c.created_at).slice(5, 16)}
+      </span>
+    </>
+  );
+}
+
 function ActionDot({ action }: { action: string }) {
   const map: Record<string, string> = {
     create: "bg-gain-500",
@@ -689,10 +748,6 @@ function ActionDot({ action }: { action: string }) {
       aria-hidden="true"
     />
   );
-}
-
-function EmptyHint({ label = "暂无数据" }: { label?: string }) {
-  return <div className="py-6 text-center text-[12px] text-ink-400">{label}</div>;
 }
 
 function OnboardingBanner({ accountCount }: { accountCount: number }) {

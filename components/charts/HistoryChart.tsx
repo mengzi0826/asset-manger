@@ -11,6 +11,7 @@ import {
   ReferenceLine
 } from "recharts";
 import { useTheme } from "@/lib/useTheme";
+import { formatCompact } from "@/lib/utils";
 
 interface Point {
   date: string;
@@ -144,10 +145,4 @@ export function HistoryChart({
   );
 }
 
-function compact(v: number): string {
-  const abs = Math.abs(v);
-  if (abs >= 1e8) return (v / 1e8).toFixed(1) + "亿";
-  if (abs >= 1e4) return (v / 1e4).toFixed(1) + "万";
-  if (abs >= 1e3) return (v / 1e3).toFixed(1) + "k";
-  return String(v);
-}
+const compact = (v: number) => formatCompact(v, { digits: 1, useK: true });

@@ -1,9 +1,9 @@
 import { getSetting } from "@/lib/db";
-import { ensureRates, listRates } from "@/lib/fx";
+import { kickoffRatesRefresh, listRates } from "@/lib/fx";
 import { SUPPORTED_CURRENCIES } from "@/lib/currencies";
 import { getFxKeyFieldState, getStockKeyFieldState } from "@/lib/juheKeys";
 import {
-  ensureStockPrices,
+  kickoffStockPricesRefresh,
   getLastStocksRefreshAt,
   listSecuritiesForView
 } from "@/lib/stocks";
@@ -17,8 +17,8 @@ import { BackupPanel } from "./_components/BackupPanel";
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  await ensureRates();
-  await ensureStockPrices();
+  kickoffRatesRefresh();
+  kickoffStockPricesRefresh();
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   const rates = listRates();
   const stockItems = listSecuritiesForView();

@@ -1,33 +1,31 @@
 import Link from "next/link";
 import { ExternalLink, TrendingUp } from "lucide-react";
 import { getSetting } from "@/lib/db";
-import { ensureRates, convert } from "@/lib/fx";
-import { ensureStockPrices, parseStockSymbol } from "@/lib/stocks";
+import { convert, kickoffRatesRefresh } from "@/lib/fx";
+import { kickoffStockPricesRefresh, parseStockSymbol } from "@/lib/stocks";
+import { todayCn } from "@/lib/time";
 import { valueAll } from "@/lib/valuation";
 import {
   computeTodayStockPnL,
   listSecuritiesBreakdown,
-  listStockPriceHistory
+  listStockPriceHistory,
+  mapSecurityQuantityBeforeFirstEditToday,
+  type TodayPnLEntry
 } from "@/lib/history";
 import {
   SecuritiesPanel,
   type SecuritiesPanelData,
   type SecuritiesPosition
 } from "@/components/charts/SecuritiesChart";
-import { formatMoney, formatPercent } from "@/lib/utils";
+import { formatCompact, formatMoney, formatPercent } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-function compact(v: number): string {
-  const abs = Math.abs(v);
-  if (abs >= 1e8) return (v / 1e8).toFixed(2) + " 亿";
-  if (abs >= 1e4) return (v / 1e4).toFixed(2) + " 万";
-  return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
+const compact = (v: number) => formatCompact(v, { digits: 2 });
 
 export default async function SecuritiesPage() {
-  await ensureRates();
-  await ensureStockPrices();
+  kickoffRatesRefresh();
+  kickoffStockPricesRefresh();
 
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   const valuation = valueAll(baseCurrency);
@@ -37,7 +35,7 @@ export default async function SecuritiesPage() {
   const securitiesHistory = listSecuritiesBreakdown(baseCurrency, 365);
   const stockPriceHistory = listStockPriceHistory(secAssetIds);
 
-  // 今日盈亏：直接用股票接口落库的当日涨跌字段（change_amount/change_percent）
+  // 今日盈亏：仅当 change_quote_date === 今天 时用 change_amount / change_percent（见 lib/history.ts）
   const todayPnL = computeTodayStockPnL(
     secItems.map((a) => ({
       id: a.id,
@@ -45,9 +43,15 @@ export default async function SecuritiesPage() {
       quantity: a.quantity ?? 0,
       currentPrice: a.current_price,
       changeAmount: a.change_amount,
-      changePercent: a.change_percent
+      changePercent: a.change_percent,
+      changeQuoteDate: a.change_quote_date
     })),
     baseCurrency
+  );
+
+  const qtyDayStartById = mapSecurityQuantityBeforeFirstEditToday(
+    secAssetIds,
+    new Map(secItems.map((a) => [a.id, a.quantity ?? 0]))
   );
 
   let secTotalCost = 0;
@@ -93,9 +97,11 @@ export default async function SecuritiesPage() {
 
   const totalValue = valuation.byCategory.securities ?? 0;
   const pnlUp = secUnrealized >= 0;
+  const secHoldingsWithQty = secItems.filter((a) => (a.quantity ?? 0) > 0);
+  const hasSecuritiesForTodayKpi = secHoldingsWithQty.length > 0;
   const todayPnLValue = todayPnL.totalBase;
-  const todayPnLAvailable = todayPnL.perAsset.size > 0;
-  const todayUp = todayPnLValue >= 0;
+  const todayUp = todayPnLValue > 0;
+  const contributingCount = todayPnL.perAsset.size;
 
   // 按固定市场顺序分组
   const MARKET_ORDER = ["沪深 A 股", "港股", "美股", "其他"] as const;
@@ -109,7 +115,13 @@ export default async function SecuritiesPage() {
   const marketStats = MARKET_ORDER.map((m) => ({ market: m, ...( byMarket[m] ?? { count: 0, value: 0 }) }))
     .filter((s) => s.count > 0);
 
-  const pnlHistory = buildPnLHistory(secPositions, stockPriceHistory, baseCurrency);
+  const pnlHistory = buildPnLHistory(
+    secPositions,
+    stockPriceHistory,
+    todayPnL.perAsset,
+    baseCurrency,
+    qtyDayStartById
+  );
 
   const panelData: SecuritiesPanelData = {
     totalValue,
@@ -169,17 +181,13 @@ export default async function SecuritiesPage() {
             <KpiCard
               label="今日盈亏"
               value={
-                todayPnLAvailable
-                  ? (todayUp ? "+" : "") + formatMoney(todayPnLValue, baseCurrency, 0)
+                hasSecuritiesForTodayKpi
+                  ? (todayPnLValue > 0 ? "+" : "") + formatMoney(todayPnLValue, baseCurrency, 0)
                   : "—"
               }
-              sub={
-                todayPnLAvailable
-                  ? `${todayPnL.perAsset.size} 只参与计算`
-                  : "暂无昨日参考价"
-              }
+              sub={hasSecuritiesForTodayKpi ? `${contributingCount} 只` : undefined}
               gain={todayUp}
-              hasData={todayPnLAvailable && todayPnLValue !== 0}
+              hasData={hasSecuritiesForTodayKpi && contributingCount > 0 && todayPnLValue !== 0}
             />
             <KpiCard
               label="浮动盈亏"
@@ -202,50 +210,47 @@ export default async function SecuritiesPage() {
             ))}
           </div>
 
-          {/* 主看板：左侧走势 2/5，右侧持仓 3/5（持仓信息列较多，需要更多横向空间） */}
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
-            {/* 左侧：走势 + 盈亏 */}
-            <div className="xl:col-span-2 space-y-6">
-              {/* 总市值走势 */}
-              <section className="card">
-                <div className="card-header">
-                  <div className="card-title">证券总市值走势</div>
-                  <span className="chip tabular">以 {baseCurrency} 结算</span>
-                </div>
-                <div className="card-body">
-                  <SecuritiesTrendSection data={panelData} />
-                </div>
-              </section>
-
-              {/* 浮动盈亏走势 */}
-              <section className="card">
-                <div className="card-header">
-                  <div className="card-title">浮动盈亏走势</div>
-                  <span className="text-[11px] text-ink-400">以 {baseCurrency} 结算 · 基于价格刷新记录</span>
-                </div>
-                <div className="card-body">
-                  <SecuritiesPnLSection data={panelData} />
-                </div>
-              </section>
-            </div>
-
-            {/* 右侧：持仓明细（更宽，单行展示完整数据） */}
-            <section className="card xl:col-span-3">
+          {/* 上排：总市值走势 + 浮动盈亏走势 左右分布、等宽等高 */}
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 xl:items-stretch">
+            <section className="card flex flex-col">
               <div className="card-header">
-                <div className="card-title">持仓明细</div>
-                <Link
-                  href="/assets"
-                  className="inline-flex items-center gap-1 text-[11px] text-ink-500 hover:text-gold-500"
-                >
-                  编辑
-                  <ExternalLink className="h-3 w-3" />
-                </Link>
+                <div className="card-title">证券总市值走势</div>
+                <span className="chip tabular">以 {baseCurrency} 结算</span>
               </div>
-              <div className="card-body overflow-y-auto" style={{ maxHeight: 720 }}>
-                <SecuritiesDetailSection data={panelData} />
+              <div className="card-body flex-1">
+                <SecuritiesTrendSection data={panelData} />
+              </div>
+            </section>
+
+            <section className="card flex flex-col">
+              <div className="card-header">
+                <div className="card-title">浮动盈亏走势</div>
+                <span className="text-[11px] text-ink-400">
+                  以 {baseCurrency} 结算 · 基于价格刷新记录
+                </span>
+              </div>
+              <div className="card-body flex-1">
+                <SecuritiesPnLSection data={panelData} />
               </div>
             </section>
           </div>
+
+          {/* 下排：持仓明细整行铺开 */}
+          <section className="card">
+            <div className="card-header">
+              <div className="card-title">持仓明细</div>
+              <Link
+                href="/assets"
+                className="inline-flex items-center gap-1 text-[11px] text-ink-500 hover:text-gold-500"
+              >
+                编辑
+                <ExternalLink className="h-3 w-3" />
+              </Link>
+            </div>
+            <div className="card-body">
+              <SecuritiesDetailSection data={panelData} />
+            </div>
+          </section>
         </>
       )}
     </div>
@@ -325,74 +330,124 @@ function SecuritiesDetailSection({ data }: { data: SecuritiesPanelData }) {
 
 /* ─────────────────── 逐日浮动盈亏重建 ─────────────────── */
 
+/** 计算 ISO 日期字符串的「前一天」（按字面日期推算，不考虑时区） */
+function isoMinusOneDay(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
 /**
- * 根据 asset_change 里的历史价格记录，逐日重建"浮动盈亏"序列。
+ * 重建「浮动盈亏」逐日序列。
+ *
+ * 关键约束：曲线最后一段（昨日 → 今日）的差值必须严格等于 KPI 的「今日盈亏」。
  *
  * 算法：
- *  1. 收集所有出现过价格更新的日期（去重、升序），并强制把今天加入。
- *  2. 按资产分组，区分「有历史记录」和「无历史记录」两类：
- *     - 有历史记录的持仓：初始价格用 unitCost（P&L 起点 = 0），随日期推进逐步更新。
- *     - 无历史记录的持仓：初始价格用 currentPrice（贡献恒定的实际盈亏），否则退回 unitCost。
- *  3. 对每个日期，推进价格后累加所有持仓的 P&L，折算到基准货币。
- *  4. 今天这个数据点强制用 currentPrice 覆盖，确保与 KPI 数字吻合。
+ *  1. 收集所有「严格早于今天」的 priceHistory 日期，加上昨日、今日。
+ *  2. 对每只持仓：
+ *     - 今天的价格 = currentPrice（与持仓明细一致）。
+ *     - 昨天的价格 = currentPrice − todayPriceChange（即接口返回的「昨收」）。
+ *       todayPriceChange 来自股票行情接口的 change_amount，所以严格保证差值匹配 KPI。
+ *     - 昨天以前：若无 priceHistory，直接沿用「昨收」做平线（贡献恒定的实际盈亏）；
+ *       若有 priceHistory，则按记录逐日推进价格。
+ *  3. 折算到基准货币累加。
  */
 function buildPnLHistory(
   positions: SecuritiesPosition[],
   priceHistory: Map<number, Array<{ date: string; price: number }>>,
-  baseCurrency: string
+  todayPnLByAsset: Map<number, TodayPnLEntry>,
+  baseCurrency: string,
+  /** 今日日初股数（含已卖出）；昨日/今日 P&L 用此股数才能与「今日盈亏」KPI 一致 */
+  qtyDayStartById: Map<number, number>
 ): Array<{ date: string; pnl: number }> {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = todayCn();
+  const yesterdayIso = isoMinusOneDay(todayIso);
 
-  // 收集所有日期，并强制包含今天
+  // 只收集「严格早于今天」的历史日期，避免今日 priceHistory 记录干扰今天的强制赋值
   const allDates = new Set<string>();
-  for (const [, h] of priceHistory) for (const { date } of h) allDates.add(date);
+  for (const [, h] of priceHistory) {
+    for (const { date } of h) {
+      if (date < todayIso) allDates.add(date);
+    }
+  }
+  allDates.add(yesterdayIso);
   allDates.add(todayIso);
 
   const sortedDates = [...allDates].sort();
 
-  // 按资产整理：date -> price 的有序记录
+  // 按资产整理：仅保留「早于今天」的 priceHistory 用于推进
   const byAsset = new Map<number, Array<{ date: string; price: number }>>();
   for (const [id, h] of priceHistory) {
-    if (h.length > 0) byAsset.set(id, [...h].sort((a, b) => a.date.localeCompare(b.date)));
+    const past = h.filter((r) => r.date < todayIso);
+    if (past.length > 0) {
+      byAsset.set(id, past.sort((a, b) => a.date.localeCompare(b.date)));
+    }
   }
 
-  // 维护每只股票的"当前已知价格"
-  //  - 有价格刷新历史的持仓：从 unitCost 出发（历史出现前 P&L = 0），逐日推进
-  //  - 没有刷新历史的持仓：直接用 currentPrice，让其在所有历史日期贡献实际盈亏
-  const latestPrice = new Map<number, number>();
+  // 计算每只持仓的「昨收价」基准（用于昨天和无历史时的常量基线）
+  const yesterdayClose = new Map<number, number>();
   for (const pos of positions) {
     if (pos.unitCost == null) continue;
-    const hasHistory = byAsset.has(pos.id);
-    latestPrice.set(pos.id, hasHistory ? pos.unitCost : (pos.currentPrice ?? pos.unitCost));
+    const entry = todayPnLByAsset.get(pos.id);
+    if (entry && pos.currentPrice != null) {
+      yesterdayClose.set(pos.id, pos.currentPrice - entry.todayPriceChange);
+    } else if (pos.currentPrice != null) {
+      // 没有 change_amount → 昨收近似为现价（这只股今日不参与差值贡献）
+      yesterdayClose.set(pos.id, pos.currentPrice);
+    } else {
+      yesterdayClose.set(pos.id, pos.unitCost);
+    }
   }
 
-  // 每个日期的游标（指向下一条未消费的价格记录）
+  // 维护每只持仓在「昨天以前」的逐日价格游标。
+  // 初始：有 priceHistory → 从 unitCost 出发（首个历史点出现前 P&L=0）；
+  //       无 priceHistory → 直接用昨收（曲线表现为常量）。
+  const runningPrice = new Map<number, number>();
+  for (const pos of positions) {
+    if (pos.unitCost == null) continue;
+    runningPrice.set(
+      pos.id,
+      byAsset.has(pos.id) ? pos.unitCost : (yesterdayClose.get(pos.id) ?? pos.unitCost)
+    );
+  }
   const cursors = new Map<number, number>();
   for (const [id] of byAsset) cursors.set(id, 0);
 
   const result: Array<{ date: string; pnl: number }> = [];
 
   for (const date of sortedDates) {
-    // 推进每只股票到当天（≤ date）的最新价格
-    for (const [id, history] of byAsset) {
-      let cur = cursors.get(id) ?? 0;
-      while (cur < history.length && history[cur].date <= date) {
-        latestPrice.set(id, history[cur].price);
-        cur++;
+    // 仅当 date < 今天时才推进 priceHistory（昨天 / 今天用各自的强制规则）
+    if (date < yesterdayIso) {
+      for (const [id, history] of byAsset) {
+        let cur = cursors.get(id) ?? 0;
+        while (cur < history.length && history[cur].date <= date) {
+          runningPrice.set(id, history[cur].price);
+          cur++;
+        }
+        cursors.set(id, cur);
       }
-      cursors.set(id, cur);
     }
 
-    // 计算当日总盈亏
     let pnl = 0;
     for (const pos of positions) {
       if (pos.unitCost == null) continue;
-      // 今天这个点强制使用 currentPrice，确保与 KPI 完全一致
-      const price =
-        date === todayIso && pos.currentPrice != null
-          ? pos.currentPrice
-          : (latestPrice.get(pos.id) ?? pos.unitCost);
-      const pnlNative = (price - pos.unitCost) * pos.quantity;
+      const qtyEff =
+        date === todayIso || date === yesterdayIso
+          ? qtyDayStartById.get(pos.id) ?? pos.quantity
+          : pos.quantity;
+      let price: number;
+      if (date === todayIso) {
+        price = pos.currentPrice ?? runningPrice.get(pos.id) ?? pos.unitCost;
+      } else if (date === yesterdayIso) {
+        price = yesterdayClose.get(pos.id) ?? pos.unitCost;
+      } else {
+        price = runningPrice.get(pos.id) ?? pos.unitCost;
+      }
+      const pnlNative = (price - pos.unitCost) * qtyEff;
       pnl += convert(pnlNative, pos.currency, baseCurrency) ?? 0;
     }
     result.push({ date, pnl: Math.round(pnl) });

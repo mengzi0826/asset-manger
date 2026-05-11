@@ -12,12 +12,13 @@ function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
+/** 北京时间 ISO，精度到「整点小时」（分、秒恒为 00），不写毫秒 */
 export function toCnIso(d: Date): string {
   if (Number.isNaN(d.getTime())) return "";
   const t = new Date(d.getTime() + CN_TZ_OFFSET_MS);
   return (
     `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}` +
-    `T${pad(t.getUTCHours())}:${pad(t.getUTCMinutes())}:${pad(t.getUTCSeconds())}+08:00`
+    `T${pad(t.getUTCHours())}:00:00+08:00`
   );
 }
 
@@ -29,6 +30,84 @@ export function nowCn(): string {
 /** 北京时区下的 `YYYY-MM-DD` */
 export function todayCn(): string {
   return nowCn().slice(0, 10);
+}
+
+/** 该北京日历日是否为周六 / 周日（按 UTC 日期分量解释 ymd） */
+export function isWeekendBeijing(ymd: string): boolean {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return wd === 0 || wd === 6;
+}
+
+/**
+ * 解析聚合数据股票接口 `data.time` 为北京时区下的 `YYYY-MM-DD`。
+ * 常见：`2026-04-29 15:00:00`、纯数字 Unix 秒/毫秒；用于判断「涨跌额」是否属于**今天**的行情会话。
+ * 解析失败返回 null（调用方按「无行情日期」处理）。
+ */
+export function parseJuheDataTimeToBeijingYmd(
+  raw: string | number | undefined | null
+): string | null {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const ms = raw < 1e12 ? raw * 1000 : raw;
+    return toCnIso(new Date(ms)).slice(0, 10);
+  }
+  const s = String(raw).trim();
+  const head = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (head) return head[1];
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) return toCnIso(d).slice(0, 10);
+  return null;
+}
+
+/**
+ * 常见行情 `date` 字串：`2026-05-09`、`2026/5/9`、`20260509`、前缀日期后接时间等。
+ * 返回北京日历 `YYYY-MM-DD`，失败 null。
+ */
+export function parseLooseCalendarYmdToBeijing(raw: string): string | null {
+  const s = raw.trim();
+  if (!s) return null;
+  const slashOrDash = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (slashOrDash) {
+    const y = slashOrDash[1];
+    const mo = pad(Number(slashOrDash[2]));
+    const d = pad(Number(slashOrDash[3]));
+    return `${y}-${mo}-${d}`;
+  }
+  const compact = s.match(/^(\d{4})(\d{2})(\d{2})\b/);
+  if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
+  const head = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (head) return head[1];
+  const du = new Date(s);
+  if (!Number.isNaN(du.getTime())) return toCnIso(du).slice(0, 10);
+  return null;
+}
+
+/**
+ * Juhe 股票 data 体：优先 `date`（通常为**交易日**），没有再解析 `time`。
+ * 用于判断「涨跌额」是否属于北京时区下的**今天**。
+ */
+export function juheQuoteSessionYmdFromData(data: Record<string, unknown>): string | null {
+  const rawDate = data.date;
+  if (rawDate != null && rawDate !== "") {
+    if (typeof rawDate === "number" && Number.isFinite(rawDate)) {
+      const n = rawDate;
+      // 聚合常把交易日写成整数 20260509，若当毫秒解析会错到 1970 年
+      if (Number.isInteger(n) && n >= 19700101 && n <= 21001231) {
+        const y = Math.floor(n / 10000);
+        const mo = Math.floor((n % 10000) / 100);
+        const d = n % 100;
+        if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+          return `${y}-${pad(mo)}-${pad(d)}`;
+        }
+      }
+      const ms = n < 1e12 ? n * 1000 : n;
+      return toCnIso(new Date(ms)).slice(0, 10);
+    }
+    const fromStr = parseLooseCalendarYmdToBeijing(String(rawDate));
+    if (fromStr) return fromStr;
+  }
+  return parseJuheDataTimeToBeijingYmd(data.time as string | number | undefined | null);
 }
 
 /**
@@ -45,12 +124,12 @@ export function parseDbDate(s: string): Date {
   return new Date(str);
 }
 
-/** 统一展示成北京时间 `YYYY-MM-DD HH:mm:ss` */
+/** 统一展示成北京时间 `YYYY-MM-DD HH:00`（与存库粒度一致，不展示分秒） */
 export function formatCnDateTime(s?: string | null): string {
   if (!s) return "-";
   const d = parseDbDate(s);
   if (Number.isNaN(d.getTime())) return s;
-  return toCnIso(d).slice(0, 19).replace("T", " ");
+  return toCnIso(d).slice(0, 16).replace("T", " ");
 }
 
 /** 汇率：距上次非手动拉取满 8 小时再刷新 */

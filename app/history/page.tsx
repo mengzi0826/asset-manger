@@ -1,5 +1,5 @@
 import { getSetting } from "@/lib/db";
-import { ensureRates } from "@/lib/fx";
+import { kickoffRatesRefresh } from "@/lib/fx";
 import { ensureTodaySnapshot, listChanges, listSnapshots } from "@/lib/history";
 import { HistoryChart } from "@/components/charts/HistoryChart";
 import { formatDate, formatMoney, formatPercent, formatCnDateTime } from "@/lib/utils";
@@ -21,7 +21,7 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 export default async function HistoryPage() {
-  await ensureRates();
+  kickoffRatesRefresh();
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   ensureTodaySnapshot(baseCurrency);
   const snapshots = listSnapshots(baseCurrency, 3650);

@@ -1,17 +1,17 @@
 "use client";
 
 import { Moon, Sun } from "lucide-react";
-import { setTheme, useTheme } from "@/lib/useTheme";
+import { useThemeContext } from "@/lib/themeContext";
 
 export function ThemeToggle() {
-  const theme = useTheme();
+  const { theme, toggle } = useThemeContext();
   const isDark = theme === "dark";
   const label = isDark ? "切换到浅色模式" : "切换到深色模式";
 
   return (
     <button
       type="button"
-      onClick={() => setTheme(isDark ? "light" : "dark")}
+      onClick={toggle}
       className="icon-btn"
       aria-label={label}
       title={label}

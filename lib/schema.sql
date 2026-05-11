@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS asset (
   current_price REAL,
   change_amount REAL,                  -- 当日单价涨跌额（原币），来自股票行情接口
   change_percent REAL,                 -- 当日涨跌幅（小数：0.0013 = 0.13%）
+  change_updated_at TEXT,              -- 历史兼容字段（当前"今日"判定已改用 change_quote_date）
+  change_quote_date TEXT,             -- 接口 data.date（优先）/ data.time → 北京 YYYY-MM-DD；≠ 今天则涨跌不算「今日」
   amount REAL,
   annual_rate REAL,
   start_date TEXT,

@@ -11,6 +11,7 @@ import {
   ReferenceLine
 } from "recharts";
 import { useTheme } from "@/lib/useTheme";
+import { formatCompact } from "@/lib/utils";
 
 /* ─────────────── constants ─────────────── */
 
@@ -104,17 +105,8 @@ function usePalette(isDark: boolean) {
 
 /* ─────────────── formatters ─────────────── */
 
-function compact(v: number): string {
-  const abs = Math.abs(v);
-  if (abs >= 1e8) return (v / 1e8).toFixed(1) + "亿";
-  if (abs >= 1e4) return (v / 1e4).toFixed(1) + "万";
-  if (abs >= 1e3) return (v / 1e3).toFixed(1) + "k";
-  // 小数点统一只保留一位，避免今日盈亏小金额（个位数）显示长串小数
-  return v.toLocaleString(undefined, {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1
-  });
-}
+/** 紧凑数值：图表轴 / 行内紧凑展示用，全项目统一在 lib/utils.ts。 */
+const compact = (v: number) => formatCompact(v, { digits: 1, useK: true });
 
 function pctStr(v: number, decimals = 1): string {
   return `${v >= 0 ? "+" : ""}${(v * 100).toFixed(decimals)}%`;
@@ -380,8 +372,15 @@ export function SecuritiesPanel({
   const isDark = useTheme() === "dark";
   const pal = usePalette(isDark);
 
-  const { totalValue, unrealizedPnL, positionCount, currency, securitiesHistory, pnlHistory, positions } =
-    data;
+  const {
+    totalValue,
+    unrealizedPnL,
+    positionCount,
+    currency,
+    securitiesHistory,
+    pnlHistory,
+    positions
+  } = data;
   const pnlUp = unrealizedPnL >= 0;
 
   const pnlPosCount = positions.filter((p) => (p.pnlPct ?? 0) > 0).length;
@@ -572,13 +571,13 @@ function MarketGroupedDetail({
       {MARKET_ORDER.map((m) => {
         const list = groups.get(m)!;
         if (list.length === 0) return null;
-        // 当组内任一持仓有数据时，汇总「今日盈亏」「累计盈亏」展示在小标题右侧
-        const todayBaseSum = list.reduce(
-          (s, p) => s + (p.todayPnLBase ?? 0),
-          0
-        );
+        // 组内若有任一标的带「今日」数据则汇总今日；否则今日显示 —
+        const hasTodayInGroup = list.some((p) => p.todayChangePct != null);
+        const todayBaseSum = hasTodayInGroup
+          ? list.reduce((s, p) => s + (p.todayPnLBase ?? 0), 0)
+          : null;
         const totalBaseSum = list.reduce((s, p) => s + (p.pnlBase ?? 0), 0);
-        const todayUp = todayBaseSum >= 0;
+        const todayUp = (todayBaseSum ?? 0) >= 0;
         const totalUp = totalBaseSum >= 0;
         return (
           <div key={m}>
@@ -591,12 +590,18 @@ function MarketGroupedDetail({
               <span className="ml-auto flex items-baseline gap-3 text-[10px]">
                 <span className="text-ink-400">
                   今日{" "}
-                  <span
-                    className={`tabular font-medium ${todayUp ? "text-gain-700" : "text-loss-700"}`}
-                  >
-                    {todayBaseSum >= 0 ? "+" : ""}
-                    {compact(todayBaseSum)}
-                  </span>
+                  {todayBaseSum == null ? (
+                    <span className="tabular font-medium text-ink-400">—</span>
+                  ) : (
+                    <span
+                      className={`tabular font-medium ${
+                        todayUp ? "text-gain-700" : "text-loss-700"
+                      }`}
+                    >
+                      {todayBaseSum >= 0 ? "+" : ""}
+                      {compact(todayBaseSum)}
+                    </span>
+                  )}
                 </span>
                 <span className="text-ink-400">
                   累计{" "}

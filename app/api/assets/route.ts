@@ -8,14 +8,28 @@ import { nowCn } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
-const nullableNumber = z
-  .union([z.number(), z.string(), z.null()])
-  .transform((v) => {
-    if (v === null || v === undefined || v === "") return null;
-    const n = typeof v === "number" ? v : Number(v);
-    return Number.isFinite(n) ? n : null;
-  })
-  .nullable();
+/**
+ * 通用：可空数字。允许 null / "" / 数字 / 数值字符串。
+ * `min` 不为 undefined 时再做下限校验（部分字段例如 annual_rate 可以为负？
+ * 当前业务里所有金额/价格都不能为负，统一收口在这里）。
+ */
+function makeNullableNumber(min?: number) {
+  return z
+    .union([z.number(), z.string(), z.null()])
+    .transform((v) => {
+      if (v === null || v === undefined || v === "") return null;
+      const n = typeof v === "number" ? v : Number(v);
+      return Number.isFinite(n) ? n : null;
+    })
+    .refine(
+      (v) => v == null || min === undefined || v >= min,
+      min !== undefined ? `数值不能小于 ${min}` : "数值无效"
+    )
+    .nullable();
+}
+
+const nullableNumber = makeNullableNumber();
+const nullableNonNegative = makeNullableNumber(0);
 
 const nullableString = z
   .union([z.string(), z.null()])
@@ -32,9 +46,10 @@ const assetSchema = z.object({
     .transform((v) => Number(v))
     .refine((v) => Number.isFinite(v) && v >= 0, "份额/数量无效")
     .default(1),
-  unit_cost: nullableNumber.optional(),
-  current_price: nullableNumber.optional(),
-  amount: nullableNumber.optional(),
+  unit_cost: nullableNonNegative.optional(),
+  current_price: nullableNonNegative.optional(),
+  amount: nullableNonNegative.optional(),
+  // 年化利率支持负数极少见，但保留 nullableNumber 以容纳极端结构性产品
   annual_rate: nullableNumber.optional(),
   start_date: nullableString.optional(),
   maturity_date: nullableString.optional(),
