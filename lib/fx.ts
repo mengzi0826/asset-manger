@@ -1,4 +1,4 @@
-import { ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
+import { fetch as undiciFetch } from "undici";
 import { getDB, type FxRate } from "./db";
 import { SUPPORTED_CURRENCIES } from "./currencies";
 import { getJuheFxAppKey } from "./juheKeys";
@@ -9,35 +9,6 @@ export type { Currency } from "./currencies";
 
 const JUHE_EXCHANGE_URL = "http://op.juhe.cn/onebox/exchange/currency";
 const FX_SOURCE = "juhe";
-
-// 很多开发环境本机开了 Clash / ClashX / Surge 等代理（Fake-IP 模式），
-// Node 原生 fetch 默认不走系统代理，会出现 DNS 解析失败 / 连接被拒。
-// 这里显式读取 HTTP(S)_PROXY / ALL_PROXY 环境变量，只针对汇率调用走代理，
-// 不影响 Next.js 其他 fetch 行为。
-let fxDispatcher: Dispatcher | undefined;
-let fxDispatcherInitialized = false;
-
-function getFxDispatcher(): Dispatcher | undefined {
-  if (fxDispatcherInitialized) return fxDispatcher;
-  fxDispatcherInitialized = true;
-  const proxy =
-    process.env.FX_PROXY ||
-    process.env.HTTPS_PROXY ||
-    process.env.https_proxy ||
-    process.env.HTTP_PROXY ||
-    process.env.http_proxy ||
-    process.env.ALL_PROXY ||
-    process.env.all_proxy;
-  if (proxy) {
-    try {
-      fxDispatcher = new ProxyAgent(proxy);
-      console.log(`[fx] using HTTP proxy for juhe: ${proxy}`);
-    } catch (e: any) {
-      console.warn(`[fx] invalid proxy url "${proxy}": ${e?.message}`);
-    }
-  }
-  return fxDispatcher;
-}
 
 interface JuheExchangeItem {
   currencyF: string;
@@ -107,9 +78,7 @@ async function fetchPairFromJuhe(
     appkey
   )}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&version=2`;
   try {
-    const dispatcher = getFxDispatcher();
     const res = await undiciFetch(url, {
-      dispatcher,
       headers: { "user-agent": "asset-manager/1.0 (+node)" }
     });
     if (!res.ok) {

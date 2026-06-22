@@ -1,5 +1,4 @@
 import { fetch as undiciFetch } from "undici";
-import { getProxyDispatcher } from "./net";
 import { getDB, getSetting, setSetting, type AssetWithMeta } from "./db";
 import { getJuheStockAppKey } from "./juheKeys";
 import {
@@ -10,7 +9,8 @@ import {
   nowCn,
   parseDbDate,
   shouldRefreshStocksBy10And14,
-  todayCn
+  todayCn,
+  toCnIso
 } from "./time";
 
 /**
@@ -203,7 +203,6 @@ async function fetchPriceFromJuhe(
 
   try {
     const res = await undiciFetch(u.toString(), {
-      dispatcher: getProxyDispatcher(),
       headers: {
         accept: "application/json,text/plain,*/*",
         "user-agent": "asset-manager/1.0 (+node)"
@@ -247,9 +246,150 @@ async function fetchPriceFromJuhe(
   } catch (e: any) {
     const cause = e?.cause;
     const detail = [e?.message, cause?.code, cause?.message].filter(Boolean).join(" | ");
-    console.error(`[stocks] fetch ${info.display} failed:`, detail);
     return { ok: false, fatal: false, error: detail || "network error" };
   }
+}
+
+/** 股票接口调用日志保留时长（30 天） */
+const STOCK_REFRESH_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+export interface StockRefreshLogEntry {
+  id: number;
+  run_id: string;
+  asset_id: number | null;
+  asset_name: string | null;
+  symbol: string | null;
+  api_param: string | null;
+  ok: boolean;
+  price: number | null;
+  error: string | null;
+  force_refresh: boolean;
+  created_at: string;
+}
+
+function newStockRefreshRunId(): string {
+  return `${nowCn()}-${Date.now()}`;
+}
+
+function stockRefreshLogCutoffIso(): string {
+  return toCnIso(new Date(Date.now() - STOCK_REFRESH_LOG_RETENTION_MS));
+}
+
+function pruneStockRefreshLogs(): void {
+  const db = getDB();
+  db.prepare(`DELETE FROM stock_refresh_log WHERE created_at < ?`).run(
+    stockRefreshLogCutoffIso()
+  );
+}
+
+function writeStockRefreshLog(entry: {
+  runId: string;
+  assetId?: number | null;
+  assetName?: string | null;
+  symbol?: string | null;
+  apiParam?: string | null;
+  ok: boolean;
+  price?: number | null;
+  error?: string | null;
+  force?: boolean;
+}): void {
+  const db = getDB();
+  db.prepare(
+    `INSERT INTO stock_refresh_log
+       (run_id, asset_id, asset_name, symbol, api_param, ok, price, error, force_refresh, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    entry.runId,
+    entry.assetId ?? null,
+    entry.assetName ?? null,
+    entry.symbol ?? null,
+    entry.apiParam ?? null,
+    entry.ok ? 1 : 0,
+    entry.price ?? null,
+    entry.error ?? null,
+    entry.force ? 1 : 0,
+    nowCn()
+  );
+  pruneStockRefreshLogs();
+}
+
+function logStockApiResult(
+  runId: string,
+  info: StockSymbolInfo,
+  asset: { id: number; name: string; symbol: string | null },
+  r: FetchPriceResult,
+  force: boolean
+): void {
+  if (r.ok) {
+    const msg = `[stocks] ${info.display} ok price=${r.price}`;
+    console.log(msg);
+    writeStockRefreshLog({
+      runId,
+      assetId: asset.id,
+      assetName: asset.name,
+      symbol: asset.symbol,
+      apiParam: info.apiParam,
+      ok: true,
+      price: r.price,
+      force
+    });
+    return;
+  }
+  const msg = `[stocks] ${info.display} fail: ${r.error}`;
+  console.warn(msg);
+  writeStockRefreshLog({
+    runId,
+    assetId: asset.id,
+    assetName: asset.name,
+    symbol: asset.symbol,
+    apiParam: info.apiParam,
+    ok: false,
+    error: r.error,
+    force
+  });
+}
+
+/** 设置页展示：最近的股票接口调用记录 */
+export function listRecentStockRefreshLogs(
+  opts: { limit?: number; failuresOnly?: boolean } = {}
+): StockRefreshLogEntry[] {
+  const limit = opts.limit ?? 50;
+  const db = getDB();
+  const where = opts.failuresOnly ? "WHERE ok = 0" : "";
+  const rows = db
+    .prepare(
+      `SELECT id, run_id, asset_id, asset_name, symbol, api_param, ok, price, error, force_refresh, created_at
+       FROM stock_refresh_log
+       ${where}
+       ORDER BY id DESC
+       LIMIT ?`
+    )
+    .all(limit) as Array<{
+      id: number;
+      run_id: string;
+      asset_id: number | null;
+      asset_name: string | null;
+      symbol: string | null;
+      api_param: string | null;
+      ok: number;
+      price: number | null;
+      error: string | null;
+      force_refresh: number;
+      created_at: string;
+    }>;
+  return rows.map((r) => ({
+    id: r.id,
+    run_id: r.run_id,
+    asset_id: r.asset_id,
+    asset_name: r.asset_name,
+    symbol: r.symbol,
+    api_param: r.api_param,
+    ok: r.ok === 1,
+    price: r.price,
+    error: r.error,
+    force_refresh: r.force_refresh === 1,
+    created_at: r.created_at
+  }));
 }
 
 export interface StockAssetView {
@@ -442,6 +582,7 @@ export async function refreshStockPrices(
     };
   }
 
+  const runId = newStockRefreshRunId();
   refreshInFlight = true;
   try {
 
@@ -485,10 +626,21 @@ export async function refreshStockPrices(
     if (!info) {
       base.error = "无法识别股票代码";
       failedCount++;
+      writeStockRefreshLog({
+        runId,
+        assetId: asset.id,
+        assetName: asset.name,
+        symbol: asset.symbol,
+        ok: false,
+        error: base.error,
+        force: !!opts.force
+      });
+      console.warn(`[stocks] ${asset.symbol ?? asset.name} fail: ${base.error}`);
       items.push(base);
       continue;
     }
     const r = await fetchPriceFromJuhe(info, appkey);
+    logStockApiResult(runId, info, asset, r, !!opts.force);
     if (r.ok) {
       const now = nowCn();
       // 强约束：change_quote_date 不允许为空；接口解析失败时回落到今天
@@ -519,6 +671,10 @@ export async function refreshStockPrices(
   if (updatedCount > 0 || failedCount > 0) {
     setSetting("last_stocks_refresh_at", nowCn());
   }
+
+  console.log(
+    `[stocks] refresh done run=${runId} updated=${updatedCount} failed=${failedCount} force=${!!opts.force}`
+  );
 
   return {
     last_refreshed_at: getSetting("last_stocks_refresh_at"),

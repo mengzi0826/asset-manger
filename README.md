@@ -33,7 +33,7 @@
 - 浮动盈亏走势图（从价格刷新记录重建，反映盈亏随时间的变化）
 - 持仓明细，按市场分组（沪深 A 股 → 港股 → 美股），每行附 mini sparkline；**周六、日**「今日% / 今日」为 **—**；工作日无涨跌数据时为 **—**
 
-### 持仓
+### 资产
 
 - 全量资产列表，多条件过滤（币种 × 账户）
 - 账户（小类）管理：在 6 大类下自由创建账户（如"工行活期"、"雪球账户"、"房贷"）
@@ -155,7 +155,7 @@ FX_PROXY=http://127.0.0.1:你的端口 npm run dev
 app/
   page.tsx                   # 总览 Dashboard
   securities/                # 证券看板（独立页）
-  assets/                    # 持仓列表 + 账户管理 + 资产表单
+  assets/                    # 资产列表 + 账户管理 + 资产表单
   history/                   # 历史走势 + 变动明细
   settings/                  # 汇率 / API Key / 备份
   api/
@@ -183,7 +183,7 @@ lib/
   utils.ts                   # 格式化工具（金额 / 百分比 / 日期）
   useTheme.ts                # 客户端深浅主题 hook
 components/
-  TopNav.tsx                 # 顶部导航（总览·持仓·证券·历史·设置）
+  TopNav.tsx                 # 顶部导航（总览·资产·证券·历史·设置）
   ThemeToggle.tsx            # 深色 / 浅色模式切换
   charts/
     AllocationChart.tsx      # 资产构成饼图 + 永久图例

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ExternalLink, TrendingUp } from "lucide-react";
+import { ExternalLink, Plus, TrendingUp } from "lucide-react";
 import { getSetting } from "@/lib/db";
 import { convert, kickoffRatesRefresh } from "@/lib/fx";
 import { kickoffStockPricesRefresh, parseStockSymbol } from "@/lib/stocks";
@@ -147,10 +147,10 @@ export default async function SecuritiesPage() {
           </p>
         </div>
         <Link
-          href="/assets/new"
+          href="/assets/new?cat=securities"
           className="btn-primary"
         >
-          新增持仓
+          <Plus className="h-3.5 w-3.5" /> 新增持仓
         </Link>
       </div>
 
@@ -161,11 +161,11 @@ export default async function SecuritiesPage() {
             <div>
               <div className="text-[15px] font-semibold text-ink-900">还没有证券持仓</div>
               <div className="mt-1 text-[13px] text-ink-500">
-                在「持仓」中为证券类账户添加资产，或直接点击上方新增按钮
+                在「资产」页为证券类账户添加资产，或直接点击上方新增按钮
               </div>
             </div>
-            <Link href="/assets/new" className="btn-outline mt-2">
-              立即添加
+            <Link href="/assets/new?cat=securities" className="btn-outline mt-2">
+              <Plus className="h-3.5 w-3.5" /> 新增持仓
             </Link>
           </div>
         </div>

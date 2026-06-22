@@ -32,6 +32,13 @@ interface SecuritySuggestion {
   quote_id: string;
 }
 
+export interface CashAssetOption {
+  id: number;
+  name: string;
+  amount: number;
+  currency: string;
+}
+
 function rowToForm(row: AssetRow | null, defaultAccountId: number): FormState {
   if (!row) {
     return {
@@ -69,19 +76,24 @@ export function AssetForm({
   mode,
   initial,
   categories,
-  accounts
+  accounts,
+  cashAssets = [],
+  defaultAccountId
 }: {
   mode: "create" | "edit";
   initial: AssetRow | null;
   categories: Category[];
   accounts: Account[];
+  cashAssets?: CashAssetOption[];
+  defaultAccountId?: number;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(() =>
-    rowToForm(initial, accounts[0]?.id ?? 0)
+    rowToForm(initial, defaultAccountId ?? accounts[0]?.id ?? 0)
   );
+  const [cashAssetId, setCashAssetId] = useState<string>("");
   /**
    * 标记 currency / symbol 是否被「证券查询」自动填充过且用户尚未手动覆盖。
    * 切换账户到非 securities 类时，这种"残留的 USD/HKD"应当被自动清掉，
@@ -129,12 +141,46 @@ export function AssetForm({
     return map;
   }, [accounts]);
 
+  // 新建证券时可选：从同币种现金资产扣款（份额 × 买入均价）
+  const showCashDeduct = mode === "create" && showQuantityPrice;
+  const sameCcyCash = useMemo(
+    () =>
+      cashAssets.filter(
+        (c) => c.currency.toUpperCase() === form.currency.toUpperCase()
+      ),
+    [cashAssets, form.currency]
+  );
+  const selectedCash = sameCcyCash.find((c) => String(c.id) === cashAssetId);
+  const buyCost =
+    form.quantity !== "" && form.unit_cost !== ""
+      ? Number(form.quantity) * Number(form.unit_cost)
+      : null;
+  const cashInsufficient =
+    selectedCash != null && buyCost != null && buyCost > selectedCash.amount + 1e-9;
+
+  // 切换币种后，已选的现金账户可能不再同币种 → 清空
+  useEffect(() => {
+    if (cashAssetId && !sameCcyCash.some((c) => String(c.id) === cashAssetId)) {
+      setCashAssetId("");
+    }
+  }, [sameCcyCash, cashAssetId]);
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     if (!form.account_id) {
       setError("请先创建一个账户（小类）");
       return;
+    }
+    if (showCashDeduct && selectedCash) {
+      if (form.unit_cost === "") {
+        setError("勾选扣款账户时需要填写买入均价");
+        return;
+      }
+      if (cashInsufficient) {
+        setError("现金余额不足");
+        return;
+      }
     }
     const payload: Record<string, any> = {
       account_id: form.account_id,
@@ -150,6 +196,9 @@ export function AssetForm({
       maturity_date: form.maturity_date || null,
       notes: form.notes || null
     };
+    if (showCashDeduct && cashAssetId !== "") {
+      payload.cash_asset_id = Number(cashAssetId);
+    }
 
     const url = mode === "create" ? "/api/assets" : `/api/assets/${initial!.id}`;
     const method = mode === "create" ? "POST" : "PATCH";
@@ -180,7 +229,7 @@ export function AssetForm({
           <AlertTriangle className="h-6 w-6 text-gold-500" />
           <div>
             <div className="text-[15px] font-semibold text-ink-900">还没有账户</div>
-            <div className="mt-1">请先到「持仓」页创建一个账户（小类）后再添加资产。</div>
+            <div className="mt-1">请先到「资产」页创建一个账户（小类）后再添加资产。</div>
           </div>
           <Link href="/assets" className="btn-primary">
             前往创建账户
@@ -281,7 +330,7 @@ export function AssetForm({
       {/* Section: Position */}
       <div className="card">
         <div className="card-header">
-          <div className="card-title">持仓数据</div>
+          <div className="card-title">资产数据</div>
           <span className="text-[11px] text-ink-400">按大类自动展示相关字段</span>
         </div>
         <div className="card-body">
@@ -338,6 +387,47 @@ export function AssetForm({
                   onChange={(e) => setForm({ ...form, current_price: e.target.value })}
                 />
               </Field>
+            </div>
+          )}
+          {showCashDeduct && (
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Field
+                label="扣款现金账户（可选）"
+                hint={`建仓时从该 ${form.currency} 现金资产扣除「份额 × 买入均价」；不选则不调整现金`}
+              >
+                <select
+                  className="input"
+                  value={cashAssetId}
+                  onChange={(e) => setCashAssetId(e.target.value)}
+                >
+                  <option value="">不调整现金</option>
+                  {sameCcyCash.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}（余额 {c.amount} {c.currency}）
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {selectedCash && (
+                <div className="flex items-end">
+                  <div className="text-[12px] tabular">
+                    <div className="text-[10px] uppercase tracking-wider text-ink-400">
+                      预计扣款 / 扣款后余额
+                    </div>
+                    <div
+                      className={`mt-0.5 font-medium ${
+                        cashInsufficient ? "text-loss-700" : "text-ink-900"
+                      }`}
+                    >
+                      {buyCost != null ? buyCost : "—"}
+                      {" → "}
+                      {buyCost != null ? selectedCash.amount - buyCost : selectedCash.amount}{" "}
+                      {form.currency}
+                      {cashInsufficient && "（余额不足）"}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

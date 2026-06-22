@@ -7,7 +7,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 const ITEMS = [
   { href: "/", label: "总览", icon: LayoutDashboard },
-  { href: "/assets", label: "持仓", icon: List },
+  { href: "/assets", label: "资产", icon: List },
   { href: "/securities", label: "证券", icon: TrendingUp },
   { href: "/history", label: "历史", icon: History },
   { href: "/settings", label: "设置", icon: Settings }

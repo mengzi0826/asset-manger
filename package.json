@@ -3,10 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "FX_PROXY=${FX_PROXY-http://127.0.0.1:7890} next dev -H 127.0.0.1 -p 3000",
-    "dev:noproxy": "FX_PROXY= next dev -H 127.0.0.1 -p 3000",
+    "dev": "next dev -H 127.0.0.1 -p 3000",
     "build": "next build",
-    "start": "FX_PROXY=${FX_PROXY-http://127.0.0.1:7890} next start -H 127.0.0.1 -p 3000",
+    "start": "next start -H 127.0.0.1 -p 3000",
     "lint": "next lint"
   },
   "dependencies": {

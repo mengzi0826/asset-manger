@@ -4,12 +4,14 @@ import { CheckCircle2, RefreshCcw, AlertTriangle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { formatCnDateTime } from "@/lib/time";
-import type { StockAssetView, StockRefreshResult } from "@/lib/stocks";
+import type { StockAssetView, StockRefreshLogEntry, StockRefreshResult } from "@/lib/stocks";
 
 interface Props {
   items: StockAssetView[];
   lastRefreshedAt: string | null;
   nextRefreshAt: string;
+  refreshLogs: StockRefreshLogEntry[];
+  refreshFailures: StockRefreshLogEntry[];
 }
 
 function formatMoney(n: number | null, currency: string): string {
@@ -35,7 +37,13 @@ function diffBadge(prev: number | null, curr: number | null): { label: string; t
   };
 }
 
-export function StockManager({ items, lastRefreshedAt, nextRefreshAt }: Props) {
+export function StockManager({
+  items,
+  lastRefreshedAt,
+  nextRefreshAt,
+  refreshLogs,
+  refreshFailures
+}: Props) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ text: string; tone: "info" | "success" | "error" } | null>(null);
@@ -160,6 +168,90 @@ export function StockManager({ items, lastRefreshedAt, nextRefreshAt }: Props) {
             </span>
           </div>
         )}
+
+        <div className="space-y-3">
+            <div className="text-[12px] font-semibold text-ink-700">接口调用日志</div>
+            <div className="text-[11px] text-ink-400">
+              每次单股接口调用会写入本地 SQLite（保留最近 30 天），便于排查未刷新原因。
+            </div>
+            {refreshFailures.length > 0 ? (
+              <div className="overflow-hidden rounded-md border border-loss-100">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th className="text-left">时间</th>
+                      <th className="text-left">名称</th>
+                      <th className="text-left">代码</th>
+                      <th className="text-left">接口参数</th>
+                      <th className="text-left">失败原因</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {refreshFailures.map((log) => (
+                      <tr key={log.id}>
+                        <td className="tabular text-[11px] text-ink-400">
+                          {formatCnDateTime(log.created_at)}
+                        </td>
+                        <td>{log.asset_name ?? "—"}</td>
+                        <td className="tabular">{log.symbol ?? "—"}</td>
+                        <td className="tabular text-[11px] text-ink-500">{log.api_param ?? "—"}</td>
+                        <td className="text-[11px] text-loss-600">{log.error ?? "未知错误"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-md border border-hair bg-canvas-sunk/60 px-3 py-2 text-[12px] text-ink-500">
+                {refreshLogs.length > 0 ? "近期无失败记录。" : "暂无调用记录；下次自动或手动刷新后开始记录。"}
+              </div>
+            )}
+            {refreshLogs.length > 0 ? (
+              <details className="rounded-md border border-hair bg-canvas-sunk/40 px-3 py-2">
+                <summary className="cursor-pointer text-[12px] font-medium text-ink-600">
+                  查看最近 {refreshLogs.length} 条调用（含成功）
+                </summary>
+                <div className="mt-3 overflow-hidden rounded-md border border-hair">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th className="text-left">时间</th>
+                        <th className="text-left">代码</th>
+                        <th className="text-left">结果</th>
+                        <th className="text-right">价格</th>
+                        <th className="text-left">备注</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {refreshLogs.map((log) => (
+                        <tr key={log.id}>
+                          <td className="tabular text-[11px] text-ink-400">
+                            {formatCnDateTime(log.created_at)}
+                          </td>
+                          <td className="tabular">{log.symbol ?? "—"}</td>
+                          <td>
+                            <span
+                              className={
+                                log.ok ? "text-[11px] text-gain-700" : "text-[11px] text-loss-600"
+                              }
+                            >
+                              {log.ok ? "成功" : "失败"}
+                            </span>
+                          </td>
+                          <td className="tabular text-right">
+                            {log.price != null ? log.price : "—"}
+                          </td>
+                          <td className="text-[11px] text-ink-500">
+                            {log.error ?? (log.force_refresh ? "手动" : "自动")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            ) : null}
+          </div>
 
         <div className="overflow-hidden rounded-md border border-hair">
           <table className="data-table">

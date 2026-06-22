@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { fetch as undiciFetch } from "undici";
-import { getProxyDispatcher } from "@/lib/net";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -98,7 +97,6 @@ export async function GET(req: Request) {
   try {
     const resp = await undiciFetch(url.toString(), {
       method: "GET",
-      dispatcher: getProxyDispatcher(),
       headers: {
         accept: "application/json,text/plain,*/*",
         "user-agent":

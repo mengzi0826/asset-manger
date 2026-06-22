@@ -84,3 +84,21 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshot (
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshot_date ON portfolio_snapshot(date);
+
+-- 股票价格接口调用日志（每次单股请求一条，便于排查未刷新原因）
+CREATE TABLE IF NOT EXISTS stock_refresh_log (
+  id INTEGER PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  asset_id INTEGER,
+  asset_name TEXT,
+  symbol TEXT,
+  api_param TEXT,
+  ok INTEGER NOT NULL DEFAULT 0,
+  price REAL,
+  error TEXT,
+  force_refresh INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now', '+8 hours') || '+08:00')
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_refresh_log_time ON stock_refresh_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_refresh_log_symbol ON stock_refresh_log(symbol, created_at DESC);

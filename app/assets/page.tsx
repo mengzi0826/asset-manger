@@ -51,9 +51,9 @@ export default async function AssetsPage({ searchParams }: PageProps) {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="eyebrow">持仓管理</div>
+          <div className="eyebrow">资产管理</div>
           <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900">
-            持仓
+            资产
           </h1>
           <p className="mt-0.5 text-[13px] text-ink-500">
             共 {items.length} 笔资产 · {accounts.length} 个账户 · 以 {baseCurrency} 结算

@@ -766,7 +766,7 @@ function OnboardingBanner({ accountCount }: { accountCount: number }) {
           </div>
           <div className="mt-1 text-[13px] text-ink-500">
             {accountCount === 0
-              ? "请先到「持仓」页创建一个账户（例如：工行活期），再添加资产。"
+              ? "请先到「资产」页创建一个账户（例如：工行活期），再添加资产。"
               : "系统已自动初始化 6 个大类，现在可以添加第一笔资产了。"}
           </div>
         </div>
