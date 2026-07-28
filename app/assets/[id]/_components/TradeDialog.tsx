@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, TrendingDown, TrendingUp } from "lucide-react";
+import { Loader2, LogOut, TrendingDown, TrendingUp } from "lucide-react";
 import { formatMoney } from "@/lib/utils";
 
 export interface CashAssetOption {
@@ -12,7 +12,7 @@ export interface CashAssetOption {
   currency: string;
 }
 
-type Side = "buy" | "sell";
+type Side = "buy" | "sell" | "close";
 
 export function TradeDialog({
   assetId,
@@ -43,10 +43,14 @@ export function TradeDialog({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const qtyNum = Number(quantity);
+  const isClose = side === "close";
   const priceNum = Number(price);
-  const hasQty = quantity !== "" && Number.isFinite(qtyNum) && qtyNum > 0;
   const hasPrice = price !== "" && Number.isFinite(priceNum) && priceNum >= 0;
+  // 清仓固定为「全部剩余股数」，不需要用户填股数
+  const qtyNum = isClose ? currentQuantity : Number(quantity);
+  const hasQty = isClose
+    ? currentQuantity > 0
+    : quantity !== "" && Number.isFinite(qtyNum) && qtyNum > 0;
 
   // 建议均价：增持=加权均价；减持=沿用当前均价。用户改过后以用户为准。
   const suggestedUnitCost = useMemo(() => {
@@ -66,7 +70,13 @@ export function TradeDialog({
     : "";
 
   const tradeValue = hasQty && hasPrice ? qtyNum * priceNum : null;
-  const nextQuantity = hasQty ? (side === "buy" ? currentQuantity + qtyNum : currentQuantity - qtyNum) : null;
+  const nextQuantity = hasQty
+    ? side === "buy"
+      ? currentQuantity + qtyNum
+      : side === "close"
+      ? 0
+      : currentQuantity - qtyNum
+    : null;
 
   const selectedCash = cashAssets.find((c) => String(c.id) === cashAssetId);
   const nextCashBalance =
@@ -81,8 +91,40 @@ export function TradeDialog({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!hasQty) return setError("请填写成交股数");
     if (!hasPrice) return setError("请填写成交价");
+
+    if (isClose) {
+      if (currentQuantity <= 0) return setError("当前无持仓，无法清仓");
+      if (
+        !confirm(
+          `确认清仓「${assetName}」？将卖出全部 ${currentQuantity} 股${
+            selectedCash ? `，回款 ${round(currentQuantity * priceNum, 2)} ${currency} 转入「${selectedCash.name}」` : ""
+          }，并从资产中删除该证券。`
+        )
+      )
+        return;
+
+      setPending(true);
+      const res = await fetch(`/api/assets/${assetId}/liquidate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          price: priceNum,
+          cash_asset_id: cashAssetId === "" ? null : Number(cashAssetId)
+        })
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error ?? "清仓失败");
+        setPending(false);
+        return;
+      }
+      // 资产已删除，编辑页不再存在，跳回持仓列表
+      router.push("/assets");
+      return;
+    }
+
+    if (!hasQty) return setError("请填写成交股数");
     const finalUnitCost = Number(effectiveUnitCost);
     if (!Number.isFinite(finalUnitCost) || finalUnitCost < 0) return setError("均价无效");
     if (sellExceeds) return setError("减持股数超过当前持仓");
@@ -143,19 +185,38 @@ export function TradeDialog({
           >
             <TrendingDown className="h-3.5 w-3.5" /> 减持（卖出）
           </button>
+          <button
+            type="button"
+            onClick={() => setSide("close")}
+            className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[13px] font-medium transition ${
+              side === "close" ? "bg-loss-50 text-loss-700" : "text-ink-500 hover:text-ink-800"
+            }`}
+          >
+            <LogOut className="h-3.5 w-3.5" /> 清仓（全部卖出）
+          </button>
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <Field label="成交股数" required>
-            <input
-              type="number"
-              step="0.00000001"
-              inputMode="decimal"
-              className="input tabular"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-            />
-          </Field>
+          {isClose ? (
+            <Field label="清仓股数">
+              <input
+                className="input tabular"
+                value={`${currentQuantity}（全部）`}
+                disabled
+              />
+            </Field>
+          ) : (
+            <Field label="成交股数" required>
+              <input
+                type="number"
+                step="0.00000001"
+                inputMode="decimal"
+                className="input tabular"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+              />
+            </Field>
+          )}
           <Field label={`成交价（${currency}）`} required>
             <input
               type="number"
@@ -166,28 +227,34 @@ export function TradeDialog({
               onChange={(e) => setPrice(e.target.value)}
             />
           </Field>
-          <Field
-            label={`成交后均价（${currency}）`}
-            hint="已按公式给出建议值，可自行修改，最终以此为准"
-          >
-            <input
-              type="number"
-              step="0.0001"
-              inputMode="decimal"
-              className="input tabular"
-              value={effectiveUnitCost}
-              onChange={(e) => {
-                setUnitCost(e.target.value);
-                setUnitCostTouched(true);
-              }}
-            />
-          </Field>
+          {!isClose && (
+            <Field
+              label={`成交后均价（${currency}）`}
+              hint="已按公式给出建议值，可自行修改，最终以此为准"
+            >
+              <input
+                type="number"
+                step="0.0001"
+                inputMode="decimal"
+                className="input tabular"
+                value={effectiveUnitCost}
+                onChange={(e) => {
+                  setUnitCost(e.target.value);
+                  setUnitCostTouched(true);
+                }}
+              />
+            </Field>
+          )}
         </div>
 
         {/* 现金账户（可选） */}
         <Field
           label={side === "buy" ? "扣款现金账户（可选）" : "入账现金账户（可选）"}
-          hint={`仅展示 ${currency} 现金资产；不选则不调整现金`}
+          hint={
+            isClose
+              ? `清仓回款转入该 ${currency} 现金资产；不选则不记录现金`
+              : `仅展示 ${currency} 现金资产；不选则不调整现金`
+          }
         >
           <select
             className="input"
@@ -206,10 +273,13 @@ export function TradeDialog({
         {/* 预览 */}
         <div className="rounded-md border border-hair bg-canvas-inset px-3.5 py-3 text-[12px] tabular">
           <div className="grid grid-cols-2 gap-y-1.5 sm:grid-cols-4">
-            <Preview label="成交额" value={tradeValue != null ? formatMoney(tradeValue, currency, 2) : "—"} />
+            <Preview
+              label={isClose ? "回款金额" : "成交额"}
+              value={tradeValue != null ? formatMoney(tradeValue, currency, 2) : "—"}
+            />
             <Preview
               label="成交后股数"
-              value={nextQuantity != null ? round(nextQuantity, 6) : "—"}
+              value={isClose ? "0（已清仓）" : nextQuantity != null ? round(nextQuantity, 6) : "—"}
               danger={sellExceeds}
             />
             <Preview
@@ -225,7 +295,7 @@ export function TradeDialog({
             />
             <Preview
               label="本次方向"
-              value={side === "buy" ? "增持" : "减持"}
+              value={side === "buy" ? "增持" : side === "sell" ? "减持" : "清仓"}
             />
           </div>
         </div>
@@ -242,10 +312,10 @@ export function TradeDialog({
         <div className="flex justify-end">
           <button
             className={side === "buy" ? "btn-primary" : "btn-danger"}
-            disabled={pending || sellExceeds || cashInsufficient}
+            disabled={pending || sellExceeds || cashInsufficient || (isClose && currentQuantity <= 0)}
           >
             {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            确认{side === "buy" ? "增持" : "减持"}「{assetName}」
+            确认{side === "buy" ? "增持" : side === "sell" ? "减持" : "清仓"}「{assetName}」
           </button>
         </div>
       </form>

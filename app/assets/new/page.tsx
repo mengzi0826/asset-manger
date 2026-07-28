@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { getDB, type Account, type Category } from "@/lib/db";
+import { assetsListHref } from "@/lib/assetsNav";
 import { AssetForm, type CashAssetOption } from "../_components/AssetForm";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +30,8 @@ export default async function NewAssetPage({ searchParams }: PageProps) {
   const categories = db.prepare("SELECT * FROM category ORDER BY sort_order").all() as Category[];
   const accounts = db.prepare("SELECT * FROM account ORDER BY category_id, name").all() as Account[];
   const defaultAccountId = resolveDefaultAccountId(accounts, categories, searchParams?.cat);
+  const returnCat = searchParams?.cat;
+  const listHref = assetsListHref(returnCat);
   const cashAssets = db
     .prepare(
       `SELECT a.id, a.name, COALESCE(a.amount, 0) AS amount, a.currency
@@ -42,7 +45,7 @@ export default async function NewAssetPage({ searchParams }: PageProps) {
   return (
     <div className="space-y-5">
       <div>
-        <Link href="/assets" className="inline-flex items-center gap-1 text-[12px] text-ink-400 hover:text-ink-800">
+        <Link href={listHref} className="inline-flex items-center gap-1 text-[12px] text-ink-400 hover:text-ink-800">
           <ArrowLeft className="h-3 w-3" /> 返回资产
         </Link>
         <div className="mt-2">
@@ -60,6 +63,7 @@ export default async function NewAssetPage({ searchParams }: PageProps) {
         accounts={accounts}
         cashAssets={cashAssets}
         defaultAccountId={defaultAccountId}
+        returnCat={returnCat}
       />
     </div>
   );

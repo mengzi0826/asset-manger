@@ -297,25 +297,45 @@ export function listStockPriceHistory(
   if (assetIds.length === 0) return new Map();
   const db = getDB();
   const ph = assetIds.map(() => "?").join(",");
+  // 合并两个来源：stock_price_daily（自动刷新写入，永久保留）+ asset_change（手动编辑写入）。
+  // 同一 (asset_id, date) 优先取 stock_price_daily（priority=1），其次取 asset_change（priority=2）。
+  // asset_change 先在子查询内按 id DESC 去重（同天多次编辑取最后一次），再参与 UNION。
   const rows = db
     .prepare(
       `SELECT asset_id, date, price FROM (
-         SELECT asset_id,
-                substr(created_at, 1, 10) AS date,
-                CAST(json_extract(field_changes, '$.current_price.to') AS REAL) AS price,
+         SELECT asset_id, date, price,
                 ROW_NUMBER() OVER (
-                  PARTITION BY asset_id, substr(created_at, 1, 10)
-                  ORDER BY created_at DESC, id DESC
+                  PARTITION BY asset_id, date
+                  ORDER BY priority ASC
                 ) AS rn
-         FROM asset_change
-         WHERE asset_id IN (${ph})
-           AND action = 'update'
-           AND json_extract(field_changes, '$.current_price.to') IS NOT NULL
+         FROM (
+           SELECT asset_id, date, price, 1 AS priority
+           FROM stock_price_daily
+           WHERE asset_id IN (${ph})
+           UNION ALL
+           SELECT asset_id,
+                  substr(created_at, 1, 10) AS date,
+                  CAST(json_extract(field_changes, '$.current_price.to') AS REAL) AS price,
+                  2 AS priority
+           FROM (
+             SELECT asset_id, created_at,
+                    field_changes,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY asset_id, substr(created_at, 1, 10)
+                      ORDER BY id DESC
+                    ) AS rn2
+             FROM asset_change
+             WHERE asset_id IN (${ph})
+               AND action = 'update'
+               AND json_extract(field_changes, '$.current_price.to') IS NOT NULL
+           )
+           WHERE rn2 = 1
+         )
        )
        WHERE rn = 1
        ORDER BY asset_id, date ASC`
     )
-    .all(...assetIds) as Array<{ asset_id: number; date: string; price: number }>;
+    .all(...assetIds, ...assetIds) as Array<{ asset_id: number; date: string; price: number }>;
 
   const map = new Map<number, Array<{ date: string; price: number }>>();
   for (const r of rows) {

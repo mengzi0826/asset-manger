@@ -14,6 +14,8 @@ import {
 } from "@/lib/history";
 import {
   SecuritiesPanel,
+  TrendCard,
+  PnLCard,
   type SecuritiesPanelData,
   type SecuritiesPosition
 } from "@/components/charts/SecuritiesChart";
@@ -212,27 +214,8 @@ export default async function SecuritiesPage() {
 
           {/* 上排：总市值走势 + 浮动盈亏走势 左右分布、等宽等高 */}
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 xl:items-stretch">
-            <section className="card flex flex-col">
-              <div className="card-header">
-                <div className="card-title">证券总市值走势</div>
-                <span className="chip tabular">以 {baseCurrency} 结算</span>
-              </div>
-              <div className="card-body flex-1">
-                <SecuritiesTrendSection data={panelData} />
-              </div>
-            </section>
-
-            <section className="card flex flex-col">
-              <div className="card-header">
-                <div className="card-title">浮动盈亏走势</div>
-                <span className="text-[11px] text-ink-400">
-                  以 {baseCurrency} 结算 · 基于价格刷新记录
-                </span>
-              </div>
-              <div className="card-body flex-1">
-                <SecuritiesPnLSection data={panelData} />
-              </div>
-            </section>
+            <TrendCard data={panelData} currency={baseCurrency} />
+            <PnLCard data={panelData} currency={baseCurrency} />
           </div>
 
           {/* 下排：持仓明细整行铺开 */}
@@ -295,29 +278,7 @@ function KpiCard({
   );
 }
 
-/* ── 三个专区：把 SecuritiesPanel 的三个区域分别单独渲染 ── */
-
-/**
- * 总市值走势折线图
- * 直接复用 SecuritiesPanel 内部的数据结构，但在独立卡片里展示
- */
-function SecuritiesTrendSection({ data }: { data: SecuritiesPanelData }) {
-  const trendOnly: SecuritiesPanelData = {
-    ...data,
-    positions: [],
-    pnlHistory: []
-  };
-  return <SecuritiesPanel data={trendOnly} mode="trend" />;
-}
-
-function SecuritiesPnLSection({ data }: { data: SecuritiesPanelData }) {
-  const pnlOnly: SecuritiesPanelData = {
-    ...data,
-    positions: [],
-    securitiesHistory: []
-  };
-  return <SecuritiesPanel data={pnlOnly} mode="pnl" />;
-}
+/* ── 持仓明细专区 ── */
 
 function SecuritiesDetailSection({ data }: { data: SecuritiesPanelData }) {
   const detailOnly: SecuritiesPanelData = {

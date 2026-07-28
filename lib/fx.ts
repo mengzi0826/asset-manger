@@ -69,7 +69,10 @@ type JuheFetchResult =
   | { ok: true; items: JuheExchangeItem[] }
   | { ok: false; fatal: boolean; error: string };
 
-async function fetchPairFromJuhe(
+const JUHE_FX_MAX_ATTEMPTS = 3;
+const JUHE_FX_RETRY_DELAY_MS = 1000;
+
+async function fetchPairFromJuheOnce(
   appkey: string,
   from: string,
   to: string
@@ -79,7 +82,8 @@ async function fetchPairFromJuhe(
   )}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&version=2`;
   try {
     const res = await undiciFetch(url, {
-      headers: { "user-agent": "asset-manager/1.0 (+node)" }
+      headers: { "user-agent": "asset-manager/1.0 (+node)" },
+      signal: AbortSignal.timeout(8000)
     });
     if (!res.ok) {
       return { ok: false, fatal: false, error: `HTTP ${res.status}` };
@@ -96,9 +100,27 @@ async function fetchPairFromJuhe(
     const detail = [e?.message, cause?.code, cause?.message]
       .filter(Boolean)
       .join(" | ");
-    console.error(`[fx] juhe fetch failed (${from}->${to}):`, detail, e);
     return { ok: false, fatal: false, error: detail || "network error" };
   }
+}
+
+async function fetchPairFromJuhe(
+  appkey: string,
+  from: string,
+  to: string
+): Promise<JuheFetchResult> {
+  let last: JuheFetchResult = { ok: false, fatal: false, error: "unknown" };
+  for (let attempt = 1; attempt <= JUHE_FX_MAX_ATTEMPTS; attempt++) {
+    last = await fetchPairFromJuheOnce(appkey, from, to);
+    if (last.ok || last.fatal) return last;
+    if (attempt < JUHE_FX_MAX_ATTEMPTS) {
+      console.warn(
+        `[fx] ${from}->${to} attempt ${attempt} failed (${last.error}), retrying...`
+      );
+      await new Promise((r) => setTimeout(r, JUHE_FX_RETRY_DELAY_MS));
+    }
+  }
+  return last;
 }
 
 function isFatalJuheError(code: number): boolean {

@@ -34,6 +34,37 @@ function initDB(): Database.Database {
 
 /** 对老库做幂等的字段补齐，避免删库重建 */
 function migrateSchema(db: Database.Database) {
+  // stock_price_daily：首次创建后从 stock_refresh_log 回填已有成功记录
+  const spd = db.prepare("PRAGMA table_info(stock_price_daily)").all() as Array<{ name: string }>;
+  if (spd.length === 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS stock_price_daily (
+        asset_id INTEGER NOT NULL,
+        date     TEXT    NOT NULL,
+        price    REAL    NOT NULL,
+        PRIMARY KEY (asset_id, date)
+      );
+      CREATE INDEX IF NOT EXISTS idx_stock_price_daily_asset ON stock_price_daily(asset_id, date ASC);
+      INSERT OR IGNORE INTO stock_price_daily (asset_id, date, price)
+        SELECT asset_id,
+               substr(created_at, 1, 10) AS date,
+               price
+        FROM (
+          SELECT asset_id,
+                 created_at,
+                 price,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY asset_id, substr(created_at, 1, 10)
+                   ORDER BY id DESC
+                 ) AS rn
+          FROM stock_refresh_log
+          WHERE ok = 1
+            AND asset_id IS NOT NULL
+            AND price IS NOT NULL
+        )
+        WHERE rn = 1;
+    `);
+  }
   const cols = db.prepare("PRAGMA table_info(asset)").all() as Array<{ name: string }>;
   const names = new Set(cols.map((c) => c.name));
   if (!names.has("symbol")) {

@@ -102,3 +102,13 @@ CREATE TABLE IF NOT EXISTS stock_refresh_log (
 
 CREATE INDEX IF NOT EXISTS idx_stock_refresh_log_time ON stock_refresh_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_stock_refresh_log_symbol ON stock_refresh_log(symbol, created_at DESC);
+
+-- 每日股票收盘价快照（每只股票每天一条，永久保留，用于浮动盈亏走势图）
+CREATE TABLE IF NOT EXISTS stock_price_daily (
+  asset_id INTEGER NOT NULL,
+  date     TEXT    NOT NULL,   -- YYYY-MM-DD（北京日期）
+  price    REAL    NOT NULL,
+  PRIMARY KEY (asset_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_price_daily_asset ON stock_price_daily(asset_id, date ASC);

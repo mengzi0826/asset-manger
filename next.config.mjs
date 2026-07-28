@@ -7,7 +7,8 @@ process.env.TZ = process.env.TZ || "Asia/Shanghai";
 const nextConfig = {
   reactStrictMode: true,
   experimental: {
-    serverComponentsExternalPackages: ["better-sqlite3"]
+    serverComponentsExternalPackages: ["better-sqlite3"],
+    staleTimes: { dynamic: 0 }
   }
 };
 

@@ -10,7 +10,6 @@ interface Props {
   items: StockAssetView[];
   lastRefreshedAt: string | null;
   nextRefreshAt: string;
-  refreshLogs: StockRefreshLogEntry[];
   refreshFailures: StockRefreshLogEntry[];
 }
 
@@ -41,7 +40,6 @@ export function StockManager({
   items,
   lastRefreshedAt,
   nextRefreshAt,
-  refreshLogs,
   refreshFailures
 }: Props) {
   const router = useRouter();
@@ -169,10 +167,18 @@ export function StockManager({
           </div>
         )}
 
-        <div className="space-y-3">
-            <div className="text-[12px] font-semibold text-ink-700">接口调用日志</div>
+        <details className="rounded-md border border-hair bg-canvas-sunk/40 px-3 py-2">
+          <summary className="cursor-pointer text-[12px] font-medium text-ink-600">
+            接口调用日志
+            {refreshFailures.length > 0 && (
+              <span className="ml-2 rounded-full bg-loss-100 px-1.5 py-0.5 text-[11px] text-loss-700">
+                {refreshFailures.length} 条失败
+              </span>
+            )}
+          </summary>
+          <div className="mt-3 space-y-2">
             <div className="text-[11px] text-ink-400">
-              每次单股接口调用会写入本地 SQLite（保留最近 30 天），便于排查未刷新原因。
+              每次单股接口调用写入本地 SQLite，此处展示最近 30 条失败记录，便于排查未刷新原因。
             </div>
             {refreshFailures.length > 0 ? (
               <div className="overflow-hidden rounded-md border border-loss-100">
@@ -203,55 +209,11 @@ export function StockManager({
               </div>
             ) : (
               <div className="rounded-md border border-hair bg-canvas-sunk/60 px-3 py-2 text-[12px] text-ink-500">
-                {refreshLogs.length > 0 ? "近期无失败记录。" : "暂无调用记录；下次自动或手动刷新后开始记录。"}
+                暂无失败记录。
               </div>
             )}
-            {refreshLogs.length > 0 ? (
-              <details className="rounded-md border border-hair bg-canvas-sunk/40 px-3 py-2">
-                <summary className="cursor-pointer text-[12px] font-medium text-ink-600">
-                  查看最近 {refreshLogs.length} 条调用（含成功）
-                </summary>
-                <div className="mt-3 overflow-hidden rounded-md border border-hair">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th className="text-left">时间</th>
-                        <th className="text-left">代码</th>
-                        <th className="text-left">结果</th>
-                        <th className="text-right">价格</th>
-                        <th className="text-left">备注</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {refreshLogs.map((log) => (
-                        <tr key={log.id}>
-                          <td className="tabular text-[11px] text-ink-400">
-                            {formatCnDateTime(log.created_at)}
-                          </td>
-                          <td className="tabular">{log.symbol ?? "—"}</td>
-                          <td>
-                            <span
-                              className={
-                                log.ok ? "text-[11px] text-gain-700" : "text-[11px] text-loss-600"
-                              }
-                            >
-                              {log.ok ? "成功" : "失败"}
-                            </span>
-                          </td>
-                          <td className="tabular text-right">
-                            {log.price != null ? log.price : "—"}
-                          </td>
-                          <td className="text-[11px] text-ink-500">
-                            {log.error ?? (log.force_refresh ? "手动" : "自动")}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </details>
-            ) : null}
           </div>
+        </details>
 
         <div className="overflow-hidden rounded-md border border-hair">
           <table className="data-table">

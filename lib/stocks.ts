@@ -188,7 +188,10 @@ type FetchPriceResult =
     }
   | { ok: false; fatal: boolean; error: string };
 
-async function fetchPriceFromJuhe(
+const JUHE_STOCK_MAX_ATTEMPTS = 3;
+const JUHE_STOCK_RETRY_DELAY_MS = 1000;
+
+async function fetchPriceFromJuheOnce(
   info: StockSymbolInfo,
   appkey: string
 ): Promise<FetchPriceResult> {
@@ -248,6 +251,24 @@ async function fetchPriceFromJuhe(
     const detail = [e?.message, cause?.code, cause?.message].filter(Boolean).join(" | ");
     return { ok: false, fatal: false, error: detail || "network error" };
   }
+}
+
+async function fetchPriceFromJuhe(
+  info: StockSymbolInfo,
+  appkey: string
+): Promise<FetchPriceResult> {
+  let last: FetchPriceResult = { ok: false, fatal: false, error: "unknown" };
+  for (let attempt = 1; attempt <= JUHE_STOCK_MAX_ATTEMPTS; attempt++) {
+    last = await fetchPriceFromJuheOnce(info, appkey);
+    if (last.ok || last.fatal) return last;
+    if (attempt < JUHE_STOCK_MAX_ATTEMPTS) {
+      console.warn(
+        `[stocks] ${info.display} attempt ${attempt} failed (${last.error}), retrying...`
+      );
+      await new Promise((r) => setTimeout(r, JUHE_STOCK_RETRY_DELAY_MS));
+    }
+  }
+  return last;
 }
 
 /** 股票接口调用日志保留时长（30 天） */
@@ -597,6 +618,11 @@ export async function refreshStockPrices(
            updated_at = ?
        WHERE id = ?`
   );
+  const upsertPriceDaily = db.prepare(
+    `INSERT INTO stock_price_daily (asset_id, date, price)
+     VALUES (?, ?, ?)
+     ON CONFLICT(asset_id, date) DO UPDATE SET price = excluded.price`
+  );
 
   const items: StockRefreshItem[] = [];
   let updatedCount = 0;
@@ -653,6 +679,7 @@ export async function refreshStockPrices(
         now,
         asset.id
       );
+      upsertPriceDaily.run(asset.id, todayCn(), r.price);
       base.fetched_price = r.price;
       base.current_price = r.price;
       base.change_amount = r.changeAmount;

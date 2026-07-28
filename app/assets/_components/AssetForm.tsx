@@ -6,6 +6,7 @@ import { AlertTriangle, ArrowLeft, Loader2, Save, Search, Trash2 } from "lucide-
 import Link from "next/link";
 import type { Account, AssetRow, Category, CategoryCode } from "@/lib/db";
 import { SUPPORTED_CURRENCIES } from "@/lib/currencies";
+import { assetsListHref } from "@/lib/assetsNav";
 
 interface FormState {
   account_id: number;
@@ -78,7 +79,8 @@ export function AssetForm({
   categories,
   accounts,
   cashAssets = [],
-  defaultAccountId
+  defaultAccountId,
+  returnCat
 }: {
   mode: "create" | "edit";
   initial: AssetRow | null;
@@ -86,6 +88,8 @@ export function AssetForm({
   accounts: Account[];
   cashAssets?: CashAssetOption[];
   defaultAccountId?: number;
+  /** 进入表单前所在的资产列表分类 tab（`all` 或 category code） */
+  returnCat?: string;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -212,14 +216,26 @@ export function AssetForm({
       setError(j.error ?? "保存失败");
       return;
     }
-    start(() => router.push("/assets"));
+    const href = assetsListHref(returnCat, code);
+    start(() => {
+      router.push(href);
+      router.refresh();
+    });
   }
 
   async function remove() {
     if (!initial) return;
     if (!confirm(`确定删除「${initial.name}」？`)) return;
     await fetch(`/api/assets/${initial.id}`, { method: "DELETE" });
-    start(() => router.push("/assets"));
+    const initialAccount = accounts.find((a) => a.id === initial.account_id);
+    const initialCategory = initialAccount
+      ? categories.find((c) => c.id === initialAccount.category_id)
+      : null;
+    const href = assetsListHref(returnCat, initialCategory?.code);
+    start(() => {
+      router.push(href);
+      router.refresh();
+    });
   }
 
   if (accounts.length === 0) {

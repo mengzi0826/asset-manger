@@ -30,7 +30,8 @@ export function AssetsTable({
   items,
   baseCurrency,
   totalAssets,
-  totalLiabilities
+  totalLiabilities,
+  returnCat = "all"
 }: {
   items: ValuedAsset[];
   baseCurrency: string;
@@ -38,6 +39,8 @@ export function AssetsTable({
   totalAssets: number;
   /** 全局总负债（正数），作为负债行的占比分母 */
   totalLiabilities: number;
+  /** 当前资产列表分类 tab，用于编辑后返回 */
+  returnCat?: string;
 }) {
   const [selectedCurrencies, setSelectedCurrencies] = useState<string[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
@@ -335,7 +338,7 @@ export function AssetsTable({
                       )}
                     </td>
                     <td className="text-right">
-                      <AssetRowActions id={a.id} />
+                      <AssetRowActions id={a.id} returnCat={returnCat} />
                     </td>
                   </tr>
                 );

@@ -10,8 +10,50 @@ import {
   CartesianGrid,
   ReferenceLine
 } from "recharts";
+import { useState } from "react";
 import { useTheme } from "@/lib/useTheme";
 import { formatCompact } from "@/lib/utils";
+
+/* ─────────────── range selector ─────────────── */
+
+type RangeKey = "1M" | "3M" | "1Y" | "ALL";
+
+const RANGE_OPTIONS: { key: RangeKey; label: string; days: number | null }[] = [
+  { key: "1M", label: "1月", days: 30 },
+  { key: "3M", label: "3月", days: 90 },
+  { key: "1Y", label: "1年", days: 365 },
+  { key: "ALL", label: "全部", days: null }
+];
+
+function filterByRange<T extends { date: string }>(data: T[], days: number | null): T[] {
+  if (!days || data.length === 0) return data;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  const filtered = data.filter((d) => d.date >= cutoffStr);
+  return filtered.length > 0 ? filtered : data;
+}
+
+function RangeSelector({ value, onChange }: { value: RangeKey; onChange: (r: RangeKey) => void }) {
+  return (
+    <div className="flex items-center gap-0.5">
+      {RANGE_OPTIONS.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          onClick={() => onChange(key)}
+          className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+            value === key
+              ? "bg-gold-500 text-canvas"
+              : "text-ink-400 hover:text-ink-700"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /* ─────────────── constants ─────────────── */
 
@@ -455,6 +497,62 @@ export function SecuritiesPanel({
         <MarketGroupedDetail positions={ranked} isDark={isDark} />
       )}
     </div>
+  );
+}
+
+/* ─────────────── TrendCard / PnLCard（含时间范围选择） ─────────────── */
+
+export function TrendCard({
+  data,
+  currency
+}: {
+  data: SecuritiesPanelData;
+  currency: string;
+}) {
+  const isDark = useTheme() === "dark";
+  const [range, setRange] = useState<RangeKey>("1Y");
+  const filtered = filterByRange(data.securitiesHistory, RANGE_OPTIONS.find((r) => r.key === range)!.days);
+
+  return (
+    <section className="card flex flex-col">
+      <div className="card-header">
+        <div className="card-title">证券总市值走势</div>
+        <div className="flex items-center gap-3">
+          <RangeSelector value={range} onChange={setRange} />
+          <span className="chip tabular">以 {currency} 结算</span>
+        </div>
+      </div>
+      <div className="card-body flex-1">
+        <TotalTrendChart data={filtered} currency={currency} isDark={isDark} tall />
+      </div>
+    </section>
+  );
+}
+
+export function PnLCard({
+  data,
+  currency
+}: {
+  data: SecuritiesPanelData;
+  currency: string;
+}) {
+  const isDark = useTheme() === "dark";
+  const [range, setRange] = useState<RangeKey>("1Y");
+  const filtered = filterByRange(data.pnlHistory, RANGE_OPTIONS.find((r) => r.key === range)!.days);
+
+  return (
+    <section className="card flex flex-col">
+      <div className="card-header">
+        <div className="card-title">浮动盈亏走势</div>
+        <div className="flex items-center gap-3">
+          <RangeSelector value={range} onChange={setRange} />
+          <span className="chip tabular">以 {currency} 结算</span>
+        </div>
+      </div>
+      <div className="card-body flex-1">
+        <PnLTrendChart data={filtered} currency={currency} isDark={isDark} tall />
+      </div>
+    </section>
   );
 }
 

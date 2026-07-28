@@ -25,8 +25,7 @@ export default async function SettingsPage() {
   const stockItems = listSecuritiesForView();
   const lastStocksRefreshAt = getLastStocksRefreshAt();
   const nextRefreshAt = nextStockAutoRefreshIso();
-  const stockRefreshLogs = listRecentStockRefreshLogs({ limit: 30 });
-  const stockRefreshFailures = listRecentStockRefreshLogs({ limit: 20, failuresOnly: true });
+  const stockRefreshFailures = listRecentStockRefreshLogs({ limit: 30, failuresOnly: true });
   const juheFxState = getFxKeyFieldState();
   const juheStockState = getStockKeyFieldState();
 
@@ -61,7 +60,6 @@ export default async function SettingsPage() {
         items={stockItems}
         lastRefreshedAt={lastStocksRefreshAt}
         nextRefreshAt={nextRefreshAt}
-        refreshLogs={stockRefreshLogs}
         refreshFailures={stockRefreshFailures}
       />
 

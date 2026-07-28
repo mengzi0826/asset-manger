@@ -5,7 +5,9 @@ import Link from "next/link";
 import { Pencil, Trash2, Check, X } from "lucide-react";
 import { useTransition, useState } from "react";
 
-export function AssetRowActions({ id }: { id: number }) {
+import { editAssetHref } from "@/lib/assetsNav";
+
+export function AssetRowActions({ id, returnCat = "all" }: { id: number; returnCat?: string }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [confirming, setConfirming] = useState(false);
@@ -41,7 +43,7 @@ export function AssetRowActions({ id }: { id: number }) {
   return (
     <div className="inline-flex items-center gap-0.5 opacity-70 transition group-hover:opacity-100">
       <Link
-        href={`/assets/${id}`}
+        href={editAssetHref(id, returnCat)}
         aria-label="编辑"
         className="btn-ghost h-7 w-7 p-0"
       >

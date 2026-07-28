@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { LayoutDashboard, TrendingUp, List, History, Settings } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -15,6 +15,7 @@ const ITEMS = [
 
 export function TopNav() {
   const pathname = usePathname();
+  const router = useRouter();
   return (
     <header className="sticky top-0 z-30 border-b border-hair bg-canvas/80 backdrop-blur-xl">
       <div className="mx-auto flex max-w-[1200px] items-center justify-between px-6 py-3">
@@ -63,6 +64,12 @@ export function TopNav() {
                   href={item.href}
                   aria-current={active ? "page" : undefined}
                   className={`nav-link ${active ? "nav-link-active" : ""}`}
+                  onClick={(e) => {
+                    if (active) {
+                      e.preventDefault();
+                      router.refresh();
+                    }
+                  }}
                 >
                   <Icon className="h-3.5 w-3.5" strokeWidth={2} />
                   {item.label}

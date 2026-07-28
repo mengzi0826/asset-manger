@@ -2,12 +2,19 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { notFound } from "next/navigation";
 import { getDB, type Account, type AssetRow, type Category } from "@/lib/db";
+import { assetsListHref } from "@/lib/assetsNav";
 import { AssetForm } from "../_components/AssetForm";
 import { TradeDialog, type CashAssetOption } from "./_components/TradeDialog";
 
 export const dynamic = "force-dynamic";
 
-export default async function EditAssetPage({ params }: { params: { id: string } }) {
+export default async function EditAssetPage({
+  params,
+  searchParams
+}: {
+  params: { id: string };
+  searchParams?: { cat?: string };
+}) {
   const id = Number(params.id);
   if (!Number.isInteger(id)) notFound();
   const db = getDB();
@@ -32,10 +39,12 @@ export default async function EditAssetPage({ params }: { params: { id: string }
         )
         .all(asset.currency) as CashAssetOption[])
     : [];
+  const returnCat = searchParams?.cat;
+  const listHref = assetsListHref(returnCat, assetCategory?.code);
   return (
     <div className="space-y-5">
       <div>
-        <Link href="/assets" className="inline-flex items-center gap-1 text-[12px] text-ink-400 hover:text-ink-800">
+        <Link href={listHref} className="inline-flex items-center gap-1 text-[12px] text-ink-400 hover:text-ink-800">
           <ArrowLeft className="h-3 w-3" /> 返回资产
         </Link>
         <div className="mt-2">
@@ -59,7 +68,13 @@ export default async function EditAssetPage({ params }: { params: { id: string }
           cashAssets={cashAssets}
         />
       )}
-      <AssetForm mode="edit" initial={asset} categories={categories} accounts={accounts} />
+      <AssetForm
+        mode="edit"
+        initial={asset}
+        categories={categories}
+        accounts={accounts}
+        returnCat={returnCat}
+      />
     </div>
   );
 }

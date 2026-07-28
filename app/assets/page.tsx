@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { getDB, getSetting, type Account, type Category, type CategoryCode } from "@/lib/db";
+import { newAssetHref } from "@/lib/assetsNav";
 import { valueAll } from "@/lib/valuation";
 import { kickoffRatesRefresh } from "@/lib/fx";
 import { kickoffStockPricesRefresh } from "@/lib/stocks";
@@ -59,7 +60,7 @@ export default async function AssetsPage({ searchParams }: PageProps) {
             共 {items.length} 笔资产 · {accounts.length} 个账户 · 以 {baseCurrency} 结算
           </p>
         </div>
-        <Link href="/assets/new" className="btn-primary">
+        <Link href={newAssetHref(activeCat)} className="btn-primary">
           <Plus className="h-3.5 w-3.5" /> 新增资产
         </Link>
       </div>
@@ -78,6 +79,7 @@ export default async function AssetsPage({ searchParams }: PageProps) {
             baseCurrency={baseCurrency}
             totalAssets={totalAssets}
             totalLiabilities={totalLiabilities}
+            returnCat={activeCat}
           />
         )}
       </div>
