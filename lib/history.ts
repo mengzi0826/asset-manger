@@ -208,7 +208,7 @@ export function listSecuritiesBreakdown(
 }
 
 /**
- * 今日盈亏（证券）：仅 `change_quote_date === todayCn()` 的标的参与。
+ * 今日盈亏（证券）：仅 `change_quote_date === todayCn()` 的标的参与（空日期不计入）。
  * 单价涨跌来自 `change_amount` / `change_percent`；股数用 `mapSecurityQuantityBeforeFirstEditToday`（当日减仓按日初股数）。
  */
 export function computeTodayStockPnL(
@@ -240,7 +240,7 @@ export function computeTodayStockPnL(
     const qtyDayStart = qtyDayStartById.get(item.id) ?? (item.quantity ?? 0);
     if (qtyDayStart <= 0) continue;
 
-    if (item.changeQuoteDate !== todayCn()) {
+    if (!item.changeQuoteDate || item.changeQuoteDate !== todayCn()) {
       continue;
     }
 

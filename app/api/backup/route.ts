@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const db = getDB();
   const payload = {
-    version: 1,
+    version: 2,
     exported_at: nowCn(),
     category: db.prepare("SELECT * FROM category ORDER BY id").all(),
     account: db.prepare("SELECT * FROM account ORDER BY id").all(),
@@ -16,7 +16,8 @@ export async function GET() {
     fx_rate: db.prepare("SELECT * FROM fx_rate").all(),
     setting: db.prepare("SELECT * FROM setting").all(),
     asset_change: db.prepare("SELECT * FROM asset_change ORDER BY id").all(),
-    portfolio_snapshot: db.prepare("SELECT * FROM portfolio_snapshot ORDER BY id").all()
+    portfolio_snapshot: db.prepare("SELECT * FROM portfolio_snapshot ORDER BY id").all(),
+    stock_price_daily: db.prepare("SELECT * FROM stock_price_daily ORDER BY asset_id, date").all()
   };
   const filename = `asset-backup-${todayCn()}.json`;
   return new NextResponse(JSON.stringify(payload, null, 2), {
@@ -37,7 +38,8 @@ const importSchema = z.object({
   fx_rate: z.array(z.any()).optional(),
   setting: z.array(z.any()).optional(),
   asset_change: z.array(z.any()).optional(),
-  portfolio_snapshot: z.array(z.any()).optional()
+  portfolio_snapshot: z.array(z.any()).optional(),
+  stock_price_daily: z.array(z.any()).optional()
 });
 
 export async function POST(req: Request) {
@@ -50,7 +52,7 @@ export async function POST(req: Request) {
     const tx = db.transaction(() => {
       if (mode === "replace") {
         db.exec(
-          "DELETE FROM asset_change; DELETE FROM portfolio_snapshot; DELETE FROM asset; DELETE FROM account; DELETE FROM fx_rate; DELETE FROM setting;"
+          "DELETE FROM stock_refresh_log; DELETE FROM stock_price_daily; DELETE FROM asset_change; DELETE FROM portfolio_snapshot; DELETE FROM asset; DELETE FROM account; DELETE FROM fx_rate; DELETE FROM setting;"
         );
       }
       if (parsed.category) {
@@ -137,6 +139,14 @@ export async function POST(req: Request) {
             base_value_cny: null,
             ...r
           });
+      }
+      if (parsed.stock_price_daily) {
+        const stmt = db.prepare(
+          `INSERT INTO stock_price_daily (asset_id, date, price)
+           VALUES (@asset_id, @date, @price)
+           ON CONFLICT(asset_id, date) DO UPDATE SET price = excluded.price`
+        );
+        for (const r of parsed.stock_price_daily) stmt.run(r);
       }
     });
     tx();

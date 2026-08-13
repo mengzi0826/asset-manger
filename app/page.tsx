@@ -14,8 +14,8 @@ import {
   Wallet
 } from "lucide-react";
 import { getDB, getSetting } from "@/lib/db";
-import { kickoffRatesRefresh } from "@/lib/fx";
-import { kickoffStockPricesRefresh } from "@/lib/stocks";
+import { kickoffRatesRefresh, getLastFxRefreshAt, getLastFxRefreshError } from "@/lib/fx";
+import { kickoffStockPricesRefresh, getLastStocksRefreshAt, getLastStocksRefreshError } from "@/lib/stocks";
 import { valueAll, type ValuedAsset } from "@/lib/valuation";
 import {
   computeTodayStockPnL,
@@ -28,6 +28,9 @@ import { AllocationChart } from "@/components/charts/AllocationChart";
 import { HistoryChart } from "@/components/charts/HistoryChart";
 import { BaseCurrencyPicker } from "./_components/BaseCurrencyPicker";
 import { formatDate, formatMoney, formatPercent, formatCnDateTime } from "@/lib/utils";
+import { getJuheFxAppKey, getJuheStockAppKey } from "@/lib/juheKeys";
+import { isWeekendBeijing, todayCn, shouldRefreshFxEvery8h, shouldRefreshStocksBy10And14 } from "@/lib/time";
+import { DataFreshnessBanner, DataFreshnessLine } from "./_components/DataFreshness";
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +83,23 @@ export default async function DashboardPage() {
     })),
     baseCurrency
   );
+  const hasTodayQuotes = todaySecPnL.perAsset.size > 0;
+  const weekend = isWeekendBeijing(todayCn());
+  const fxLast = getLastFxRefreshAt();
+  const stocksLast = getLastStocksRefreshAt();
+
+  const freshness = {
+    weekend,
+    fxConfigured: getJuheFxAppKey() !== "",
+    fxLast,
+    fxError: getLastFxRefreshError(),
+    fxStale: shouldRefreshFxEvery8h(fxLast),
+    stocksConfigured: getJuheStockAppKey() !== "",
+    stocksLast,
+    stocksError: getLastStocksRefreshError(),
+    stocksStale: shouldRefreshStocksBy10And14(stocksLast),
+    hasSecurities: hasSecuritiesForKpi
+  };
 
   // 资产构成图只展示正向资产大类
   const allocationByCategory = Object.fromEntries(
@@ -248,6 +268,7 @@ export default async function DashboardPage() {
                 </span>
               </>
             )}
+            <DataFreshnessLine {...freshness} />
           </div>
         </div>
       </section>
@@ -307,18 +328,16 @@ export default async function DashboardPage() {
                 icon={<CalendarClock className="h-3.5 w-3.5" />}
                 label="证券今日"
                 tone={
-                  !hasSecuritiesForKpi
+                  !hasTodayQuotes
                     ? "muted"
-                    : todaySecPnL.perAsset.size === 0
-                      ? "neutral"
-                      : todaySecPnL.totalBase > 0
-                        ? "gain"
-                        : todaySecPnL.totalBase < 0
-                          ? "loss"
-                          : "neutral"
+                    : todaySecPnL.totalBase > 0
+                      ? "gain"
+                      : todaySecPnL.totalBase < 0
+                        ? "loss"
+                        : "neutral"
                 }
                 value={
-                  hasSecuritiesForKpi ? (
+                  hasTodayQuotes ? (
                     <span className="tabular">
                       {todaySecPnL.totalBase > 0 ? "+" : ""}
                       {formatMoney(todaySecPnL.totalBase, baseCurrency)}
@@ -328,9 +347,13 @@ export default async function DashboardPage() {
                   )
                 }
                 hint={
-                  hasSecuritiesForKpi
-                    ? `${todaySecPnL.perAsset.size} 只`
-                    : "暂无证券持仓（或份额均为 0）"
+                  !hasSecuritiesForKpi
+                    ? "暂无证券持仓（或份额均为 0）"
+                    : weekend
+                      ? "休市"
+                      : hasTodayQuotes
+                        ? `${todaySecPnL.perAsset.size} 只`
+                        : "无今日行情"
                 }
               />
               <SummaryTile
@@ -400,6 +423,7 @@ export default async function DashboardPage() {
           </div>
         </div>
       )}
+      <DataFreshnessBanner {...freshness} />
 
       {/* 资产构成 + 净值走势 左右双列（仿照证券页布局） */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 xl:items-stretch">

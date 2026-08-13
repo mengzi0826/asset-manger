@@ -50,7 +50,7 @@ export function BackupPanel() {
             <code className="tabular mx-1 rounded border border-hair bg-canvas-raised px-1.5 py-0.5 text-[11px] text-ink-700">
               ./data/assets.db
             </code>
-            。建议定期导出 JSON 备份。
+            。建议定期导出 JSON 备份（含证券日线，恢复后走势图可接上）。覆盖导入会清空资产、快照、日线与刷新日志后再写入。
           </div>
         </div>
 

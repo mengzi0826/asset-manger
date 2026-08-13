@@ -3,7 +3,7 @@ import { ExternalLink, Plus, TrendingUp } from "lucide-react";
 import { getSetting } from "@/lib/db";
 import { convert, kickoffRatesRefresh } from "@/lib/fx";
 import { kickoffStockPricesRefresh, parseStockSymbol } from "@/lib/stocks";
-import { todayCn } from "@/lib/time";
+import { todayCn, isWeekendBeijing } from "@/lib/time";
 import { valueAll } from "@/lib/valuation";
 import {
   computeTodayStockPnL,
@@ -104,6 +104,8 @@ export default async function SecuritiesPage() {
   const todayPnLValue = todayPnL.totalBase;
   const todayUp = todayPnLValue > 0;
   const contributingCount = todayPnL.perAsset.size;
+  const weekend = isWeekendBeijing(todayCn());
+  const hasTodayQuotes = contributingCount > 0;
 
   // 按固定市场顺序分组
   const MARKET_ORDER = ["沪深 A 股", "港股", "美股", "其他"] as const;
@@ -183,13 +185,21 @@ export default async function SecuritiesPage() {
             <KpiCard
               label="今日盈亏"
               value={
-                hasSecuritiesForTodayKpi
+                hasTodayQuotes
                   ? (todayPnLValue > 0 ? "+" : "") + formatMoney(todayPnLValue, baseCurrency, 0)
                   : "—"
               }
-              sub={hasSecuritiesForTodayKpi ? `${contributingCount} 只` : undefined}
+              sub={
+                !hasSecuritiesForTodayKpi
+                  ? undefined
+                  : hasTodayQuotes
+                    ? `${contributingCount} 只`
+                    : weekend
+                      ? "休市"
+                      : "无今日行情"
+              }
               gain={todayUp}
-              hasData={hasSecuritiesForTodayKpi && contributingCount > 0 && todayPnLValue !== 0}
+              hasData={hasTodayQuotes && todayPnLValue !== 0}
             />
             <KpiCard
               label="浮动盈亏"

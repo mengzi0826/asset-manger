@@ -1,8 +1,8 @@
 import { fetch as undiciFetch } from "undici";
-import { getDB, type FxRate } from "./db";
+import { getDB, getSetting, type FxRate, setSetting, removeSetting, SETTING_LAST_FX_REFRESH_ERROR } from "./db";
 import { SUPPORTED_CURRENCIES } from "./currencies";
 import { getJuheFxAppKey } from "./juheKeys";
-import { nextFxAutoRefreshIso, nowCn, parseDbDate, shouldRefreshFxEvery8h } from "./time";
+import { nextFxAutoRefreshIso, nowCn, shouldRefreshFxEvery8h } from "./time";
 
 export { SUPPORTED_CURRENCIES };
 export type { Currency } from "./currencies";
@@ -143,15 +143,6 @@ function upsertRate(base: string, quote: string, rate: number, source: string) {
   ).run(base, quote, rate, source, nowIso());
 }
 
-function lastFetchedAt(): number {
-  const db = getDB();
-  const row = db
-    .prepare("SELECT MAX(fetched_at) AS t FROM fx_rate WHERE source != 'manual'")
-    .get() as { t: string | null };
-  if (!row?.t) return 0;
-  return parseDbDate(row.t).getTime();
-}
-
 export interface RefreshRatesResult {
   updated: boolean;
   error?: string;
@@ -160,7 +151,7 @@ export interface RefreshRatesResult {
   next_refresh_at: string;
 }
 
-function lastRefreshedIso(): string | null {
+export function getLastFxRefreshAt(): string | null {
   const db = getDB();
   const row = db
     .prepare("SELECT MAX(fetched_at) AS t FROM fx_rate WHERE source != 'manual'")
@@ -168,8 +159,13 @@ function lastRefreshedIso(): string | null {
   return row?.t ?? null;
 }
 
+export function getLastFxRefreshError(): string | null {
+  const v = getSetting(SETTING_LAST_FX_REFRESH_ERROR)?.trim();
+  return v || null;
+}
+
 export async function refreshRates(force = false): Promise<RefreshRatesResult> {
-  const last = lastRefreshedIso();
+  const last = getLastFxRefreshAt();
   const next_refresh_at = nextFxAutoRefreshIso(last);
   const appkey = getJuheFxAppKey();
   if (!appkey) {
@@ -204,10 +200,12 @@ export async function refreshRates(force = false): Promise<RefreshRatesResult> {
       if (!r.ok) {
         lastErr = r.error;
         if (r.fatal) {
+          const error = `汇率接口调用失败：${r.error}`;
+          setSetting(SETTING_LAST_FX_REFRESH_ERROR, error);
           return {
             updated: anySuccess,
-            error: `汇率接口调用失败：${r.error}`,
-            last_refreshed_at: lastRefreshedIso(),
+            error,
+            last_refreshed_at: getLastFxRefreshAt(),
             next_refresh_at
           };
         }
@@ -226,18 +224,21 @@ export async function refreshRates(force = false): Promise<RefreshRatesResult> {
   }
 
   if (!anySuccess) {
+    const error = lastErr
+      ? `无法连接汇率服务（${lastErr}）`
+      : "无法连接汇率服务";
+    setSetting(SETTING_LAST_FX_REFRESH_ERROR, error);
     return {
       updated: false,
-      error: lastErr
-        ? `无法连接汇率服务（${lastErr}），已回落至缓存值`
-        : "无法连接汇率服务，已回落至缓存值",
-      last_refreshed_at: lastRefreshedIso(),
+      error,
+      last_refreshed_at: getLastFxRefreshAt(),
       next_refresh_at
     };
   }
+  removeSetting(SETTING_LAST_FX_REFRESH_ERROR);
   return {
     updated: true,
-    last_refreshed_at: lastRefreshedIso(),
+    last_refreshed_at: getLastFxRefreshAt(),
     next_refresh_at
   };
 }

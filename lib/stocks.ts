@@ -1,5 +1,12 @@
 import { fetch as undiciFetch } from "undici";
-import { getDB, getSetting, setSetting, type AssetWithMeta } from "./db";
+import {
+  getDB,
+  getSetting,
+  removeSetting,
+  setSetting,
+  SETTING_LAST_STOCKS_REFRESH_ERROR,
+  type AssetWithMeta
+} from "./db";
 import { getJuheStockAppKey } from "./juheKeys";
 import {
   isWeekendBeijing,
@@ -20,7 +27,8 @@ import {
  *   - 香港股市：/finance/stock/hk?num=00001
  *   - 美国股市：/finance/stock/usa?gid=aapl
  * 数据延迟约数分钟；自动拉取在每日北京时间 10:00 与 14:00 两个锚点各最多一次（见 time.ts）。
- * 周六日（北京）不请求行情（见 refreshStockPrices 开头）；`change_quote_date` 仅作接口会话日记录，不参与「今日」展示判定。
+ * 自动刷新在北京周六日直接跳过；手动 `force` 仍会请求。`change_quote_date` 为接口会话日，
+ * 仅当它等于 `todayCn()` 时计入今日盈亏；解析不到则写 null，不假装成今天。
  */
 
 const JUHE_STOCK_ENDPOINT: Record<StockMarket, string> = {
@@ -557,7 +565,7 @@ export async function refreshStockPrices(
     };
   }
 
-  if (isWeekendBeijing(todayCn())) {
+  if (!opts.force && isWeekendBeijing(todayCn())) {
     return {
       last_refreshed_at: lastRefreshedAt,
       next_refresh_at,
@@ -669,8 +677,7 @@ export async function refreshStockPrices(
     logStockApiResult(runId, info, asset, r, !!opts.force);
     if (r.ok) {
       const now = nowCn();
-      // 强约束：change_quote_date 不允许为空；接口解析失败时回落到今天
-      const quoteToStore = r.quoteSessionYmd ?? todayCn();
+      const quoteToStore = r.quoteSessionYmd;
       updateStmt.run(
         r.price,
         r.changeAmount,
@@ -679,7 +686,9 @@ export async function refreshStockPrices(
         now,
         asset.id
       );
-      upsertPriceDaily.run(asset.id, todayCn(), r.price);
+      if (quoteToStore) {
+        upsertPriceDaily.run(asset.id, quoteToStore, r.price);
+      }
       base.fetched_price = r.price;
       base.current_price = r.price;
       base.change_amount = r.changeAmount;
@@ -699,6 +708,16 @@ export async function refreshStockPrices(
     setSetting("last_stocks_refresh_at", nowCn());
   }
 
+  const batchError =
+    updatedCount === 0 && failedCount > 0
+      ? items.find((i) => i.error)?.error ?? "股票价格刷新失败"
+      : undefined;
+  if (batchError) {
+    setSetting(SETTING_LAST_STOCKS_REFRESH_ERROR, batchError);
+  } else if (updatedCount > 0) {
+    removeSetting(SETTING_LAST_STOCKS_REFRESH_ERROR);
+  }
+
   console.log(
     `[stocks] refresh done run=${runId} updated=${updatedCount} failed=${failedCount} force=${!!opts.force}`
   );
@@ -709,10 +728,7 @@ export async function refreshStockPrices(
     skipped: null,
     updated_count: updatedCount,
     failed_count: failedCount,
-    error:
-      updatedCount === 0 && failedCount > 0
-        ? items.find((i) => i.error)?.error ?? "股票价格刷新失败"
-        : undefined,
+    error: batchError,
     items
   };
 
@@ -745,4 +761,9 @@ export function getLastStocksRefreshAt(): string | null {
   if (!v) return null;
   const d = parseDbDate(v);
   return Number.isNaN(d.getTime()) ? null : v;
+}
+
+export function getLastStocksRefreshError(): string | null {
+  const v = getSetting(SETTING_LAST_STOCKS_REFRESH_ERROR)?.trim();
+  return v || null;
 }

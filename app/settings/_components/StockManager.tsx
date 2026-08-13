@@ -91,6 +91,14 @@ export function StockManager({
       setResult(r);
       if (r?.error) {
         setMsg({ text: r.error, tone: "error" });
+      } else if (r?.skipped === "no_key") {
+        setMsg({ text: r.error ?? "请先配置股票价格 AppKey", tone: "error" });
+      } else if (r?.skipped === "weekend") {
+        setMsg({ text: "周末休市，自动刷新已跳过。需要更新上个交易日收盘价请再点一次手动刷新。", tone: "info" });
+      } else if (r?.skipped === "before_morning") {
+        setMsg({ text: "未到今日 10:00，自动刷新尚未开始。", tone: "info" });
+      } else if (r?.skipped === "up_to_date") {
+        setMsg({ text: "本时段已刷新过。", tone: "info" });
       } else if (r?.skipped === "no_securities") {
         setMsg({ text: "当前没有需要刷新的证券资产（请先填写股票代码）", tone: "info" });
       } else if ((r?.updated_count ?? 0) > 0) {
@@ -120,9 +128,9 @@ export function StockManager({
       <div className="card-body space-y-4">
         <div className="rounded-md bg-canvas-sunk/60 p-3 text-[12px] text-ink-500">
           <div>
-            每天北京时间 <span className="font-semibold text-ink-700">10:00</span> 与{" "}
-            <span className="font-semibold text-ink-700">14:00</span> 后各会触发一次自动刷新（在设置中已配置
-            股票 AppKey 时生效）。需即时可点「手动刷新」。
+            工作日北京时间 <span className="font-semibold text-ink-700">10:00</span> 与{" "}
+            <span className="font-semibold text-ink-700">14:00</span> 后各自动刷新一次（已配置股票
+            AppKey 时生效）。周末自动跳过；手动刷新周末仍会请求，今日盈亏按接口返回的交易日计算。
           </div>
           <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-ink-400">
             <span>

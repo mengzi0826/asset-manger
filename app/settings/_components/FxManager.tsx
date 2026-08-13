@@ -57,8 +57,7 @@ export function FxManager({ rates, supported }: { rates: FxRate[]; supported: st
       </div>
       <div className="card-body space-y-5">
         <p className="text-[12px] leading-relaxed text-ink-500">
-          每 <span className="font-medium text-ink-700">8 小时</span> 自动从聚合数据拉取一次；访问页面时会触发该逻辑（已配置汇率
-          AppKey 时有效）。下表「手动保存」的汇率以「手动」来源为准。
+          每 <span className="font-medium text-ink-700">8 小时</span> 自动从聚合数据拉取一次。下表「手动保存」的汇率以「手动」来源为准。
         </p>
         <form
           onSubmit={submit}
