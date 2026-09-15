@@ -209,7 +209,8 @@ export function listSecuritiesBreakdown(
 
 /**
  * 今日盈亏（证券）：仅 `change_quote_date === todayCn()` 的标的参与（空日期不计入）。
- * 单价涨跌来自 `change_amount` / `change_percent`；股数用 `mapSecurityQuantityBeforeFirstEditToday`（当日减仓按日初股数）。
+ * 单价涨跌由 `change_percent` + `current_price` 反推（`change_amount` 精度不足，见下）；
+ * 股数用 `mapSecurityQuantityBeforeFirstEditToday`（当日减仓按日初股数）。
  */
 export function computeTodayStockPnL(
   items: Array<{
@@ -217,7 +218,6 @@ export function computeTodayStockPnL(
     currency: string;
     quantity: number;
     currentPrice: number | null;
-    changeAmount: number | null;
     changePercent: number | null;
     /** Juhe 行情会话日 `YYYY-MM-DD`（北京）；≠ 今天则不参与今日盈亏 */
     changeQuoteDate?: string | null;
@@ -244,39 +244,27 @@ export function computeTodayStockPnL(
       continue;
     }
 
-    let todayPriceChange: number | null = null;
-    let todayChangePct: number | null = null;
-
-    if (item.changeAmount != null && Number.isFinite(item.changeAmount)) {
-      todayPriceChange = item.changeAmount;
-      todayChangePct =
-        item.changePercent != null && Number.isFinite(item.changePercent)
-          ? item.changePercent
-          : item.currentPrice != null && item.currentPrice - item.changeAmount > 0
-            ? item.changeAmount / (item.currentPrice - item.changeAmount)
-            : null;
-    } else if (
-      item.changePercent != null &&
-      Number.isFinite(item.changePercent) &&
-      item.currentPrice != null
+    // 单价涨跌一律由涨跌幅反推，不用 change_amount：聚合接口的涨跌额只给两位小数，
+    // 低价标的（0.536 元的 ETF 跌 0.37%）会被截断成 0.00，盈亏就成了 0。
+    // current = prev * (1 + pct) ⇒ prev = current / (1 + pct) ⇒ change = current - prev
+    if (
+      item.changePercent == null ||
+      !Number.isFinite(item.changePercent) ||
+      item.currentPrice == null ||
+      item.changePercent === -1
     ) {
-      // current = prev * (1 + pct) ⇒ prev = current / (1 + pct) ⇒ change = current - prev
-      const denom = 1 + item.changePercent;
-      if (denom !== 0) {
-        const prev = item.currentPrice / denom;
-        todayPriceChange = item.currentPrice - prev;
-        todayChangePct = item.changePercent;
-      }
+      continue;
     }
-
-    if (todayPriceChange == null) continue;
+    const prevPrice = item.currentPrice / (1 + item.changePercent);
+    const todayPriceChange = item.currentPrice - prevPrice;
+    const todayChangePct = item.changePercent;
 
     const todayPnLNative = todayPriceChange * qtyDayStart;
     const todayPnLBase = convert(todayPnLNative, item.currency, baseCurrency) ?? 0;
     perAsset.set(item.id, {
       assetId: item.id,
       todayPriceChange,
-      todayChangePct: todayChangePct ?? 0,
+      todayChangePct,
       todayPnLNative,
       todayPnLBase
     });

@@ -77,7 +77,6 @@ export default async function DashboardPage() {
       currency: a.currency,
       quantity: a.quantity ?? 0,
       currentPrice: a.current_price,
-      changeAmount: a.change_amount,
       changePercent: a.change_percent,
       changeQuoteDate: a.change_quote_date
     })),

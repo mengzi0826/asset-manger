@@ -37,14 +37,13 @@ export default async function SecuritiesPage() {
   const securitiesHistory = listSecuritiesBreakdown(baseCurrency, 365);
   const stockPriceHistory = listStockPriceHistory(secAssetIds);
 
-  // 今日盈亏：仅当 change_quote_date === 今天 时用 change_amount / change_percent（见 lib/history.ts）
+  // 今日盈亏：仅当 change_quote_date === 今天 时用 change_percent 反推单价涨跌（见 lib/history.ts）
   const todayPnL = computeTodayStockPnL(
     secItems.map((a) => ({
       id: a.id,
       currency: a.currency,
       quantity: a.quantity ?? 0,
       currentPrice: a.current_price,
-      changeAmount: a.change_amount,
       changePercent: a.change_percent,
       changeQuoteDate: a.change_quote_date
     })),
@@ -321,8 +320,8 @@ function isoMinusOneDay(iso: string): string {
  *  1. 收集所有「严格早于今天」的 priceHistory 日期，加上昨日、今日。
  *  2. 对每只持仓：
  *     - 今天的价格 = currentPrice（与持仓明细一致）。
- *     - 昨天的价格 = currentPrice − todayPriceChange（即接口返回的「昨收」）。
- *       todayPriceChange 来自股票行情接口的 change_amount，所以严格保证差值匹配 KPI。
+ *     - 昨天的价格 = currentPrice − todayPriceChange（即行情昨收）。
+ *       todayPriceChange 与 KPI 同出 computeTodayStockPnL，所以严格保证差值匹配 KPI。
  *     - 昨天以前：若无 priceHistory，直接沿用「昨收」做平线（贡献恒定的实际盈亏）；
  *       若有 priceHistory，则按记录逐日推进价格。
  *  3. 折算到基准货币累加。
@@ -367,7 +366,7 @@ function buildPnLHistory(
     if (entry && pos.currentPrice != null) {
       yesterdayClose.set(pos.id, pos.currentPrice - entry.todayPriceChange);
     } else if (pos.currentPrice != null) {
-      // 没有 change_amount → 昨收近似为现价（这只股今日不参与差值贡献）
+      // 没有今日涨跌 → 昨收近似为现价（这只股今日不参与差值贡献）
       yesterdayClose.set(pos.id, pos.currentPrice);
     } else {
       yesterdayClose.set(pos.id, pos.unitCost);
