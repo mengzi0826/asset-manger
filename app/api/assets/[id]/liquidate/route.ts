@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDB, type AssetRow, getSetting } from "@/lib/db";
 import { logAssetChange, ensureTodaySnapshot } from "@/lib/history";
+import { recordPortfolioEvent, type PortfolioEventLegInput } from "@/lib/portfolioEvents";
 import { nowCn } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +73,19 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     const now = nowCn();
     const run = db.transaction(() => {
+      const securityBefore = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
+      const eventLegs: PortfolioEventLegInput[] = [
+        {
+          assetId: securityBefore.id,
+          accountId: securityBefore.account_id,
+          assetName: securityBefore.name,
+          role: "security",
+          quantityDelta: -qty,
+          quantityAfter: 0,
+          unitPrice: parsed.price,
+          unitCostAfter: securityBefore.unit_cost
+        }
+      ];
       if (cash) {
         const cashBefore = db.prepare("SELECT * FROM asset WHERE id = ?").get(cash.id) as AssetRow;
         const nextAmount = (cashBefore.amount ?? 0) + proceeds;
@@ -80,11 +94,26 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         ).run({ id: cash.id, amount: nextAmount, updated_at: now });
         const cashAfter = db.prepare("SELECT * FROM asset WHERE id = ?").get(cash.id) as AssetRow;
         logAssetChange({ action: "update", before: cashBefore, after: cashAfter });
+        eventLegs.push({
+          assetId: cashAfter.id,
+          accountId: cashAfter.account_id,
+          assetName: cashAfter.name,
+          role: "cash",
+          amountDelta: proceeds,
+          amountAfter: cashAfter.amount
+        });
       }
 
-      const securityBefore = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
       db.prepare("DELETE FROM asset WHERE id = ?").run(id);
       logAssetChange({ action: "delete", before: securityBefore });
+      recordPortfolioEvent({
+        type: "security_liquidation",
+        currency: securityBefore.currency,
+        grossAmount: proceeds,
+        occurredAt: now,
+        metadata: { cash_linked: Boolean(cash) },
+        legs: eventLegs
+      });
     });
 
     run();

@@ -3,7 +3,9 @@ import { ArrowLeft } from "lucide-react";
 import { notFound } from "next/navigation";
 import { getDB, type Account, type AssetRow, type Category } from "@/lib/db";
 import { assetsListHref } from "@/lib/assetsNav";
+import { listCashFlowEntries } from "@/lib/history";
 import { AssetForm } from "../_components/AssetForm";
+import { CashFlowPanel } from "./_components/CashFlowPanel";
 import { TradeDialog, type CashAssetOption } from "./_components/TradeDialog";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +29,7 @@ export default async function EditAssetPage({
     (c) => c.id === accounts.find((a) => a.id === asset.account_id)?.category_id
   );
   const isSecurity = assetCategory?.code === "securities";
+  const isCash = assetCategory?.code === "cash";
   const cashAssets = isSecurity
     ? (db
         .prepare(
@@ -66,6 +69,15 @@ export default async function EditAssetPage({
           currentUnitCost={asset.unit_cost}
           currentPrice={asset.current_price}
           cashAssets={cashAssets}
+        />
+      )}
+      {isCash && (
+        <CashFlowPanel
+          assetId={asset.id}
+          assetName={asset.name}
+          currency={asset.currency}
+          currentAmount={asset.amount ?? 0}
+          entries={listCashFlowEntries(asset.id)}
         />
       )}
       <AssetForm

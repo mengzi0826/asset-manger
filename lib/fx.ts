@@ -1,5 +1,13 @@
 import { fetch as undiciFetch } from "undici";
-import { getDB, getSetting, type FxRate, setSetting, removeSetting, SETTING_LAST_FX_REFRESH_ERROR } from "./db";
+import {
+  getDB,
+  getSetting,
+  type FxRate,
+  type FxRateHistory,
+  setSetting,
+  removeSetting,
+  SETTING_LAST_FX_REFRESH_ERROR
+} from "./db";
 import { SUPPORTED_CURRENCIES } from "./currencies";
 import { getJuheFxAppKey } from "./juheKeys";
 import { nextFxAutoRefreshIso, nowCn, shouldRefreshFxEvery8h } from "./time";
@@ -56,13 +64,96 @@ export function listRates(): FxRate[] {
   return getDB().prepare("SELECT * FROM fx_rate ORDER BY base, quote").all() as FxRate[];
 }
 
-export function setManualRate(base: string, quote: string, rate: number) {
+function saveRate(base: string, quote: string, rate: number, source: string) {
   const db = getDB();
-  db.prepare(
-    `INSERT INTO fx_rate (base, quote, rate, source, fetched_at)
-     VALUES (?, ?, ?, 'manual', ?)
-     ON CONFLICT(base, quote) DO UPDATE SET rate = excluded.rate, source = 'manual', fetched_at = excluded.fetched_at`
-  ).run(base, quote, rate, nowIso());
+  const observedAt = nowIso();
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO fx_rate (base, quote, rate, source, fetched_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(base, quote) DO UPDATE SET
+         rate = excluded.rate,
+         source = excluded.source,
+         fetched_at = excluded.fetched_at`
+    ).run(base, quote, rate, source, observedAt);
+    db.prepare(
+      `INSERT INTO fx_rate_history (base, quote, rate, source, observed_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(base, quote, observed_at) DO UPDATE SET
+         rate = excluded.rate,
+         source = excluded.source`
+    ).run(base, quote, rate, source, observedAt);
+  })();
+}
+
+export function setManualRate(base: string, quote: string, rate: number) {
+  saveRate(base, quote, rate, "manual");
+}
+
+export interface ListRateHistoryOptions {
+  base?: string;
+  quote?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+}
+
+/** 汇率观测历史，供报表和本地 AI 做只读分析。 */
+export function listRateHistory(options: ListRateHistoryOptions = {}): FxRateHistory[] {
+  const clauses: string[] = [];
+  const params: Array<string | number> = [];
+  if (options.base) {
+    clauses.push("base = ?");
+    params.push(options.base.toUpperCase());
+  }
+  if (options.quote) {
+    clauses.push("quote = ?");
+    params.push(options.quote.toUpperCase());
+  }
+  if (options.from) {
+    clauses.push("observed_at >= ?");
+    params.push(options.from);
+  }
+  if (options.to) {
+    clauses.push("observed_at <= ?");
+    params.push(options.to);
+  }
+  const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 1000), 10000));
+  params.push(limit);
+  return getDB()
+    .prepare(
+      `SELECT * FROM fx_rate_history
+       ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
+       ORDER BY observed_at DESC, base, quote
+       LIMIT ?`
+    )
+    .all(...params) as FxRateHistory[];
+}
+
+/** 查询某时点以前最后一次观测汇率；没有正向值时尝试反向值。 */
+export function getHistoricalRateAtOrBefore(
+  base: string,
+  quote: string,
+  at: string
+): number | null {
+  base = base.toUpperCase();
+  quote = quote.toUpperCase();
+  if (base === quote) return 1;
+  const db = getDB();
+  const cutoff = /^\d{4}-\d{2}-\d{2}$/.test(at) ? `${at}T23:59:59+08:00` : at;
+  const find = (from: string, to: string) =>
+    db
+      .prepare(
+        `SELECT rate FROM fx_rate_history
+         WHERE base = ? AND quote = ? AND observed_at <= ?
+         ORDER BY observed_at DESC
+         LIMIT 1`
+      )
+      .get(from, to, cutoff) as { rate: number } | undefined;
+  const direct = find(base, quote);
+  if (direct) return direct.rate;
+  const reverse = find(quote, base);
+  return reverse && reverse.rate !== 0 ? 1 / reverse.rate : null;
 }
 
 type JuheFetchResult =
@@ -129,18 +220,6 @@ function isFatalJuheError(code: number): boolean {
   return [10001, 10002, 10003, 10004, 10005, 10007, 10008, 10009, 10011, 10012, 10021].includes(
     code
   );
-}
-
-function upsertRate(base: string, quote: string, rate: number, source: string) {
-  const db = getDB();
-  db.prepare(
-    `INSERT INTO fx_rate (base, quote, rate, source, fetched_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(base, quote) DO UPDATE SET
-       rate = excluded.rate,
-       source = excluded.source,
-       fetched_at = excluded.fetched_at`
-  ).run(base, quote, rate, source, nowIso());
 }
 
 export interface RefreshRatesResult {
@@ -217,7 +296,7 @@ export async function refreshRates(force = false): Promise<RefreshRatesResult> {
         const base = (item.currencyF || "").toUpperCase();
         const quote = (item.currencyT || "").toUpperCase();
         if (!base || !quote) continue;
-        upsertRate(base, quote, rate, FX_SOURCE);
+        saveRate(base, quote, rate, FX_SOURCE);
       }
       anySuccess = true;
     }
@@ -236,6 +315,14 @@ export async function refreshRates(force = false): Promise<RefreshRatesResult> {
     };
   }
   removeSetting(SETTING_LAST_FX_REFRESH_ERROR);
+  // 汇率变化本身会改变基准币净值；刷新成功后立即重写当天逐资产估值。
+  // 动态导入避免 history.ts -> fx.ts 的静态循环依赖。
+  try {
+    const { recordSnapshot } = await import("./history");
+    recordSnapshot((getSetting("base_currency") ?? "CNY").toUpperCase());
+  } catch (e: any) {
+    console.warn("[fx] valuation snapshot after refresh failed:", e?.message ?? e);
+  }
   return {
     updated: true,
     last_refreshed_at: getLastFxRefreshAt(),

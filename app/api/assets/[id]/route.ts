@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDB, type AssetRow, getSetting } from "@/lib/db";
 import { logAssetChange, ensureTodaySnapshot } from "@/lib/history";
+import { recordPortfolioEvent } from "@/lib/portfolioEvents";
 import { nowCn } from "@/lib/time";
+import { computeAssetValue } from "@/lib/valuation";
 
 export const dynamic = "force-dynamic";
 
@@ -71,11 +73,60 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const keys = Object.keys(patch);
     if (keys.length === 0) return NextResponse.json({ asset: before });
     const sets = keys.map((k) => `${k} = @${k}`).join(", ");
-    db.prepare(
-      `UPDATE asset SET ${sets}, updated_at = @__updated_at WHERE id = @id`
-    ).run({ ...patch, id, __updated_at: nowCn() });
-    const after = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
-    logAssetChange({ action: "update", before, after });
+    const now = nowCn();
+    const run = db.transaction(() => {
+      db.prepare(
+        `UPDATE asset SET ${sets}, updated_at = @__updated_at WHERE id = @id`
+      ).run({ ...patch, id, __updated_at: now });
+      const after = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
+      logAssetChange({ action: "update", before, after });
+
+      const economicFields = ["amount", "quantity", "unit_cost", "current_price"] as const;
+      const changedEconomicFields = economicFields.filter((key) => before[key] !== after[key]);
+      if (changedEconomicFields.length > 0) {
+        const category = db
+          .prepare(
+            `SELECT c.code FROM account acc
+             JOIN category c ON c.id = acc.category_id
+             WHERE acc.id = ?`
+          )
+          .get(after.account_id) as { code: string } | undefined;
+        const amountChanged = before.amount !== after.amount;
+        const quantityChanged = before.quantity !== after.quantity;
+        const amountDelta = amountChanged ? (after.amount ?? 0) - (before.amount ?? 0) : null;
+        const quantityDelta = quantityChanged ? (after.quantity ?? 0) - (before.quantity ?? 0) : null;
+        const unitPrice = after.current_price ?? after.unit_cost ?? 0;
+        recordPortfolioEvent({
+          type: "manual_adjustment",
+          currency: after.currency,
+          grossAmount:
+            amountDelta != null
+              ? Math.abs(amountDelta)
+              : quantityDelta != null
+                ? Math.abs(quantityDelta * unitPrice)
+                : null,
+          reason: "手动编辑资产",
+          occurredAt: now,
+          metadata: { fields: changedEconomicFields },
+          legs: [
+            {
+              assetId: after.id,
+              accountId: after.account_id,
+              assetName: after.name,
+              role: category?.code === "cash" ? "cash" : category?.code === "securities" ? "security" : "asset",
+              amountDelta,
+              amountAfter: amountChanged ? after.amount : null,
+              quantityDelta,
+              quantityAfter: quantityChanged ? after.quantity : null,
+              unitPrice: changedEconomicFields.includes("current_price") ? after.current_price : null,
+              unitCostAfter: changedEconomicFields.includes("unit_cost") ? after.unit_cost : null
+            }
+          ]
+        });
+      }
+      return after;
+    });
+    const after = run();
     ensureTodaySnapshot(getSetting("base_currency") ?? "CNY");
     return NextResponse.json({ asset: after });
   } catch (e: any) {
@@ -89,8 +140,42 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
   const db = getDB();
   const before = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow | undefined;
   if (!before) return NextResponse.json({ error: "not found" }, { status: 404 });
-  db.prepare("DELETE FROM asset WHERE id = ?").run(id);
-  logAssetChange({ action: "delete", before });
+  const now = nowCn();
+  const run = db.transaction(() => {
+    const category = db
+      .prepare(
+        `SELECT c.code FROM account acc
+         JOIN category c ON c.id = acc.category_id
+         WHERE acc.id = ?`
+      )
+      .get(before.account_id) as { code: string } | undefined;
+    const isSecurity = category?.code === "securities";
+    recordPortfolioEvent({
+      type: "asset_deleted",
+      currency: before.currency,
+      grossAmount: computeAssetValue(before),
+      reason: "删除资产",
+      occurredAt: now,
+      metadata: { category_code: category?.code ?? null },
+      legs: [
+        {
+          assetId: before.id,
+          accountId: before.account_id,
+          assetName: before.name,
+          role: category?.code === "cash" ? "cash" : isSecurity ? "security" : "asset",
+          amountDelta: !isSecurity && before.amount != null ? -before.amount : null,
+          amountAfter: !isSecurity && before.amount != null ? 0 : null,
+          quantityDelta: isSecurity ? -(before.quantity ?? 0) : null,
+          quantityAfter: isSecurity ? 0 : null,
+          unitPrice: isSecurity ? before.current_price ?? before.unit_cost : null,
+          unitCostAfter: isSecurity ? before.unit_cost : null
+        }
+      ]
+    });
+    db.prepare("DELETE FROM asset WHERE id = ?").run(id);
+    logAssetChange({ action: "delete", before });
+  });
+  run();
   ensureTodaySnapshot(getSetting("base_currency") ?? "CNY");
   return NextResponse.json({ ok: true });
 }

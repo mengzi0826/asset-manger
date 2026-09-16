@@ -36,8 +36,11 @@ export default async function SecuritiesPage() {
   const secAssetIds = secItems.map((a) => a.id);
   const securitiesHistory = listSecuritiesBreakdown(baseCurrency, 365);
   const stockPriceHistory = listStockPriceHistory(secAssetIds);
+  const stockInfoByAssetId = new Map(
+    secItems.map((asset) => [asset.id, parseStockSymbol(asset.symbol)] as const)
+  );
 
-  // 今日盈亏：仅当 change_quote_date === 今天 时用 change_percent 反推单价涨跌（见 lib/history.ts）
+  // 沪深/港股取北京时间今天；美股取最近一个有效交易日（见 lib/history.ts）。
   const todayPnL = computeTodayStockPnL(
     secItems.map((a) => ({
       id: a.id,
@@ -45,6 +48,7 @@ export default async function SecuritiesPage() {
       quantity: a.quantity ?? 0,
       currentPrice: a.current_price,
       changePercent: a.change_percent,
+      market: stockInfoByAssetId.get(a.id)?.market ?? null,
       changeQuoteDate: a.change_quote_date
     })),
     baseCurrency
@@ -75,7 +79,7 @@ export default async function SecuritiesPage() {
       secUnrealized += pnlNative * fxRatio;
     }
     const pnlBase = pnlNative != null ? pnlNative * fxRatio : null;
-    const stockInfo = parseStockSymbol(a.symbol);
+    const stockInfo = stockInfoByAssetId.get(a.id);
     const todayEntry = todayPnL.perAsset.get(a.id);
     return {
       id: a.id,
@@ -90,6 +94,7 @@ export default async function SecuritiesPage() {
       pnlNative,
       pnlBase,
       pnlPct,
+      quoteDate: todayEntry?.quoteDate ?? null,
       todayChangePct: todayEntry?.todayChangePct ?? null,
       todayPnLBase: todayEntry?.todayPnLBase ?? null,
       priceHistory: stockPriceHistory.get(a.id) ?? []
@@ -182,7 +187,7 @@ export default async function SecuritiesPage() {
               sub={`${secItems.length} 只持仓`}
             />
             <KpiCard
-              label="今日盈亏"
+              label="市场当日盈亏"
               value={
                 hasTodayQuotes
                   ? (todayPnLValue > 0 ? "+" : "") + formatMoney(todayPnLValue, baseCurrency, 0)
@@ -194,8 +199,8 @@ export default async function SecuritiesPage() {
                   : hasTodayQuotes
                     ? `${contributingCount} 只`
                     : weekend
-                      ? "休市"
-                      : "无今日行情"
+                      ? "休市或无可用会话日"
+                      : "无可用会话日"
               }
               gain={todayUp}
               hasData={hasTodayQuotes && todayPnLValue !== 0}

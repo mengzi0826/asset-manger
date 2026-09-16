@@ -4,6 +4,7 @@ import { getDB, type AssetRow } from "@/lib/db";
 import { logAssetChange, ensureTodaySnapshot } from "@/lib/history";
 import { listAssetsWithMeta } from "@/lib/valuation";
 import { getSetting } from "@/lib/db";
+import { recordPortfolioEvent, type PortfolioEventLegInput } from "@/lib/portfolioEvents";
 import { nowCn } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -75,6 +76,15 @@ export async function POST(req: Request) {
     const db = getDB();
     const now = nowCn();
     const currency = parsed.currency.toUpperCase();
+    const targetAccount = db
+      .prepare(
+        `SELECT acc.id, c.code AS category_code
+         FROM account acc
+         JOIN category c ON c.id = acc.category_id
+         WHERE acc.id = ?`
+      )
+      .get(parsed.account_id) as { id: number; category_code: string } | undefined;
+    if (!targetAccount) return NextResponse.json({ error: "账户不存在" }, { status: 404 });
 
     // 可选：新建仓时从同币种现金资产扣款（份额 × 买入均价）
     let cash:
@@ -137,15 +147,57 @@ export async function POST(req: Request) {
       const created = db.prepare("SELECT * FROM asset WHERE id = ?").get(res.lastInsertRowid) as AssetRow;
       logAssetChange({ action: "create", after: created });
 
+      let cashAfter: AssetRow | undefined;
       if (cash) {
         const cashBefore = db.prepare("SELECT * FROM asset WHERE id = ?").get(cash.id) as AssetRow;
         const nextAmount = (cashBefore.amount ?? 0) - tradeValue;
         db.prepare(
           `UPDATE asset SET amount = @amount, updated_at = @updated_at WHERE id = @id`
         ).run({ id: cash.id, amount: nextAmount, updated_at: now });
-        const cashAfter = db.prepare("SELECT * FROM asset WHERE id = ?").get(cash.id) as AssetRow;
+        cashAfter = db.prepare("SELECT * FROM asset WHERE id = ?").get(cash.id) as AssetRow;
         logAssetChange({ action: "update", before: cashBefore, after: cashAfter });
       }
+
+      const isSecurity = targetAccount.category_code === "securities";
+      const assetValue =
+        created.amount != null
+          ? created.amount
+          : (created.quantity ?? 0) * (created.current_price ?? created.unit_cost ?? 0);
+      const eventLegs: PortfolioEventLegInput[] = [
+        {
+          assetId: created.id,
+          accountId: created.account_id,
+          assetName: created.name,
+          role: isSecurity ? "security" : targetAccount.category_code === "cash" ? "cash" : "asset",
+          amountDelta: !isSecurity ? created.amount : null,
+          amountAfter: !isSecurity ? created.amount : null,
+          quantityDelta: isSecurity ? created.quantity : null,
+          quantityAfter: isSecurity ? created.quantity : null,
+          unitPrice: isSecurity ? created.unit_cost : null,
+          unitCostAfter: isSecurity ? created.unit_cost : null
+        }
+      ];
+      if (cashAfter) {
+        eventLegs.push({
+          assetId: cashAfter.id,
+          accountId: cashAfter.account_id,
+          assetName: cashAfter.name,
+          role: "cash",
+          amountDelta: -tradeValue,
+          amountAfter: cashAfter.amount
+        });
+      }
+      recordPortfolioEvent({
+        type: isSecurity && cashAfter ? "security_buy" : "asset_created",
+        currency: created.currency,
+        grossAmount: isSecurity && cashAfter ? tradeValue : assetValue,
+        occurredAt: now,
+        metadata: {
+          category_code: targetAccount.category_code,
+          opening_position: !(isSecurity && cashAfter)
+        },
+        legs: eventLegs
+      });
 
       return created;
     });

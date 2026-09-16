@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { listRates, refreshRates, setManualRate, SUPPORTED_CURRENCIES } from "@/lib/fx";
+import { getSetting } from "@/lib/db";
+import { recordSnapshot } from "@/lib/history";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +28,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     const parsed = manualSchema.parse(body);
     setManualRate(parsed.base.toUpperCase(), parsed.quote.toUpperCase(), parsed.rate);
+    recordSnapshot((getSetting("base_currency") ?? "CNY").toUpperCase());
     return NextResponse.json({ ok: true, rates: listRates() });
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? "Invalid" }, { status: 400 });

@@ -1,5 +1,11 @@
-import { getDB, type AssetRow, type AssetChange, type PortfolioSnapshot } from "./db";
-import { convert } from "./fx";
+import {
+  getDB,
+  type AssetRow,
+  type AssetChange,
+  type AssetValuationDaily,
+  type PortfolioSnapshot
+} from "./db";
+import { convert, getRate } from "./fx";
 import { computeAssetValue, valueAll } from "./valuation";
 import { nowCn, todayCn } from "./time";
 
@@ -73,9 +79,11 @@ export function mapSecurityQuantityBeforeFirstEditToday(
   return out;
 }
 
-/** 单只股票的「今日盈亏」分项数据（来自股票行情接口落库的当日涨跌字段） */
+/** 单只股票的「行情会话日盈亏」分项数据（来自股票行情接口落库的当日涨跌字段） */
 export interface TodayPnLEntry {
   assetId: number;
+  /** 该笔涨跌对应的市场交易日 `YYYY-MM-DD` */
+  quoteDate: string;
   /** 单价的今日变化（原币） */
   todayPriceChange: number;
   /** 单价的今日涨跌幅（小数：0.0013 = 0.13%） */
@@ -90,8 +98,9 @@ export function logAssetChange(params: {
   action: "create" | "update" | "delete";
   before?: AssetRow | null;
   after?: AssetRow | null;
+  extraChanges?: Record<string, { from: unknown; to: unknown }>;
 }) {
-  const { action, before, after } = params;
+  const { action, before, after, extraChanges } = params;
   const db = getDB();
   const target = after ?? before;
   if (!target) return;
@@ -116,6 +125,7 @@ export function logAssetChange(params: {
         fieldChanges[k as string] = { from: (before as any)[k], to: (after as any)[k] };
       }
     }
+    if (extraChanges) Object.assign(fieldChanges, extraChanges);
     if (Object.keys(fieldChanges).length === 0) return;
   }
 
@@ -159,20 +169,286 @@ export function listChanges(limit = 200): AssetChange[] {
     .all(limit) as AssetChange[];
 }
 
+export interface CashFlowEntry {
+  id: number;
+  type: "deposit" | "expense";
+  /** 带方向的原币金额：入金为正，消费为负。 */
+  amount: number;
+  reason: string;
+  createdAt: string;
+}
+
+/** 从资产变动日志中提取指定现金资产的人工入金/消费记录。 */
+export function listCashFlowEntries(assetId: number, limit = 50): CashFlowEntry[] {
+  const rows = getDB()
+    .prepare(
+      `SELECT id, field_changes, created_at
+       FROM asset_change
+       WHERE asset_id = ?
+         AND action = 'update'
+         AND CASE
+               WHEN json_valid(field_changes)
+               THEN json_extract(field_changes, '$.cash_flow_type.to')
+             END IN ('deposit', 'expense')
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(assetId, limit) as Array<{ id: number; field_changes: string; created_at: string }>;
+
+  const entries: CashFlowEntry[] = [];
+  for (const row of rows) {
+    try {
+      const changes = JSON.parse(row.field_changes) as Record<string, { to?: unknown }>;
+      const type = changes.cash_flow_type?.to;
+      const amount = Number(changes.cash_flow_amount?.to);
+      const reason = String(changes.cash_flow_reason?.to ?? "").trim();
+      if ((type !== "deposit" && type !== "expense") || !Number.isFinite(amount) || !reason) continue;
+      entries.push({ id: row.id, type, amount, reason, createdAt: row.created_at });
+    } catch {
+      /* 忽略损坏的历史记录，不影响现金资产页渲染 */
+    }
+  }
+  return entries;
+}
+
 export function recordSnapshot(baseCurrency: string): PortfolioSnapshot {
   const db = getDB();
-  const { total, byCategory } = valueAll(baseCurrency);
+  const { total, byCategory, items } = valueAll(baseCurrency);
   const today = todayCn();
-  db.prepare(
+  const capturedAt = nowCn();
+  const rateByCurrency = new Map<string, number | null>();
+  for (const item of items) {
+    if (!rateByCurrency.has(item.currency)) {
+      rateByCurrency.set(item.currency, getRate(item.currency, baseCurrency));
+    }
+  }
+  const upsertSnapshot = db.prepare(
     `INSERT INTO portfolio_snapshot (date, base_currency, total_value, breakdown, created_at)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(date, base_currency) DO UPDATE SET
        total_value = excluded.total_value,
        breakdown = excluded.breakdown`
-  ).run(today, baseCurrency, total, JSON.stringify(byCategory), nowCn());
+  );
+  const clearDaily = db.prepare(
+    "DELETE FROM asset_valuation_daily WHERE date = ? AND base_currency = ?"
+  );
+  const insertDaily = db.prepare(
+    `INSERT INTO asset_valuation_daily
+     (date, base_currency, asset_id, account_id, asset_name, category_code,
+      currency, quantity, unit_cost, unit_price, amount, native_value,
+      fx_rate, base_value, captured_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  db.transaction(() => {
+    upsertSnapshot.run(today, baseCurrency, total, JSON.stringify(byCategory), capturedAt);
+    // 当日快照语义是“当天最新状态”，先清掉同日旧明细，避免已删除资产残留。
+    clearDaily.run(today, baseCurrency);
+    for (const item of items) {
+      insertDaily.run(
+        today,
+        baseCurrency,
+        item.id,
+        item.account_id,
+        item.name,
+        item.category_code,
+        item.currency,
+        item.quantity,
+        item.unit_cost,
+        item.current_price ?? item.unit_cost ?? null,
+        item.amount,
+        item.native_value,
+        rateByCurrency.get(item.currency) ?? null,
+        item.base_value,
+        capturedAt
+      );
+    }
+  })();
   return db
     .prepare("SELECT * FROM portfolio_snapshot WHERE date = ? AND base_currency = ?")
     .get(today, baseCurrency) as PortfolioSnapshot;
+}
+
+export interface ListAssetValuationsOptions {
+  baseCurrency: string;
+  from?: string;
+  to?: string;
+  assetId?: number;
+  limit?: number;
+}
+
+/** 逐资产每日估值历史；默认返回最近写入的记录。 */
+export function listAssetValuations(
+  options: ListAssetValuationsOptions
+): AssetValuationDaily[] {
+  const clauses = ["base_currency = ?"];
+  const params: Array<string | number> = [options.baseCurrency.toUpperCase()];
+  if (options.from) {
+    clauses.push("date >= ?");
+    params.push(options.from);
+  }
+  if (options.to) {
+    clauses.push("date <= ?");
+    params.push(options.to);
+  }
+  if (options.assetId != null) {
+    clauses.push("asset_id = ?");
+    params.push(options.assetId);
+  }
+  const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 5000), 20000));
+  params.push(limit);
+  return getDB()
+    .prepare(
+      `SELECT * FROM asset_valuation_daily
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY date DESC, asset_id ASC
+       LIMIT ?`
+    )
+    .all(...params) as AssetValuationDaily[];
+}
+
+export interface FxImpactEntry {
+  currency: string;
+  previousNativeValue: number;
+  currentNativeValue: number;
+  previousRate: number | null;
+  currentRate: number | null;
+  baseValueChange: number;
+  /** 对称分解：平均原币敞口 × 汇率变化。 */
+  fxImpact: number | null;
+  /** 对称分解：原币价值变化 × 平均汇率；其中仍包含交易、资金流和市场波动。 */
+  nativeValueImpact: number | null;
+  comparable: boolean;
+}
+
+export interface FxImpactSummary {
+  baseCurrency: string;
+  from: string;
+  to: string;
+  hasPreviousSnapshot: boolean;
+  hasCurrentSnapshot: boolean;
+  hasPreviousValuation: boolean;
+  hasCurrentValuation: boolean;
+  totalBaseValueChange: number;
+  totalFxImpact: number;
+  totalNativeValueImpact: number;
+  unclassifiedBaseValueChange: number;
+  byCurrency: FxImpactEntry[];
+}
+
+/**
+ * 比较两个已存在的逐资产日快照，并把净值变化对称拆成“原币价值变化”和“汇率变化”。
+ * 新出现/消失的币种或缺失汇率不猜测，计入 unclassifiedBaseValueChange。
+ */
+export function summarizeFxImpact(
+  baseCurrency: string,
+  from: string,
+  to: string
+): FxImpactSummary {
+  const db = getDB();
+  const rows = db
+    .prepare(
+      `SELECT date, currency, category_code, native_value, fx_rate, base_value
+       FROM asset_valuation_daily
+       WHERE base_currency = ? AND date IN (?, ?)`
+    )
+    .all(baseCurrency.toUpperCase(), from, to) as Array<{
+      date: string;
+      currency: string;
+      category_code: string;
+      native_value: number;
+      fx_rate: number | null;
+      base_value: number;
+    }>;
+  const snapshots = db
+    .prepare(
+      `SELECT date, total_value
+       FROM portfolio_snapshot
+       WHERE base_currency = ? AND date IN (?, ?)`
+    )
+    .all(baseCurrency.toUpperCase(), from, to) as Array<{
+      date: string;
+      total_value: number;
+    }>;
+  const previousSnapshot = snapshots.find((row) => row.date === from);
+  const currentSnapshot = snapshots.find((row) => row.date === to);
+  const hasPreviousValuation = rows.some((row) => row.date === from);
+  const hasCurrentValuation = rows.some((row) => row.date === to);
+
+  type Side = { present: boolean; native: number; base: number; rate: number | null };
+  const buckets = new Map<string, { previous: Side; current: Side }>();
+  const emptySide = (): Side => ({ present: false, native: 0, base: 0, rate: null });
+  for (const row of rows) {
+    const bucket = buckets.get(row.currency) ?? {
+      previous: emptySide(),
+      current: emptySide()
+    };
+    const side = row.date === from ? bucket.previous : bucket.current;
+    const sign = row.category_code === "liability" ? -1 : 1;
+    side.present = true;
+    side.native += sign * row.native_value;
+    side.base += sign * row.base_value;
+    if (row.fx_rate != null) side.rate = row.fx_rate;
+    buckets.set(row.currency, bucket);
+  }
+
+  let detailedBaseValueChange = 0;
+  let totalFxImpact = 0;
+  let totalNativeValueImpact = 0;
+  let comparableBaseValueChange = 0;
+  const byCurrency: FxImpactEntry[] = [];
+  for (const [currency, { previous, current }] of buckets) {
+    const baseValueChange = current.base - previous.base;
+    detailedBaseValueChange += baseValueChange;
+    const comparable =
+      previous.present &&
+      current.present &&
+      previous.rate != null &&
+      current.rate != null;
+    let fxImpact: number | null = null;
+    let nativeValueImpact: number | null = null;
+    if (comparable) {
+      fxImpact =
+        ((previous.native + current.native) / 2) * (current.rate! - previous.rate!);
+      nativeValueImpact =
+        (current.native - previous.native) * ((previous.rate! + current.rate!) / 2);
+      totalFxImpact += fxImpact;
+      totalNativeValueImpact += nativeValueImpact;
+      comparableBaseValueChange += baseValueChange;
+    }
+    byCurrency.push({
+      currency,
+      previousNativeValue: previous.native,
+      currentNativeValue: current.native,
+      previousRate: previous.rate,
+      currentRate: current.rate,
+      baseValueChange,
+      fxImpact,
+      nativeValueImpact,
+      comparable
+    });
+  }
+  byCurrency.sort((a, b) => Math.abs(b.baseValueChange) - Math.abs(a.baseValueChange));
+
+  // 总净值优先取组合快照。旧库可能只有总快照而没有逐资产历史，差额会完整落入未归因。
+  const totalBaseValueChange =
+    previousSnapshot && currentSnapshot
+      ? currentSnapshot.total_value - previousSnapshot.total_value
+      : detailedBaseValueChange;
+
+  return {
+    baseCurrency: baseCurrency.toUpperCase(),
+    from,
+    to,
+    hasPreviousSnapshot: previousSnapshot != null,
+    hasCurrentSnapshot: currentSnapshot != null,
+    hasPreviousValuation,
+    hasCurrentValuation,
+    totalBaseValueChange,
+    totalFxImpact,
+    totalNativeValueImpact,
+    unclassifiedBaseValueChange: totalBaseValueChange - comparableBaseValueChange,
+    byCurrency
+  };
 }
 
 export function listSnapshots(baseCurrency: string, days = 365): PortfolioSnapshot[] {
@@ -208,7 +484,8 @@ export function listSecuritiesBreakdown(
 }
 
 /**
- * 今日盈亏（证券）：仅 `change_quote_date === todayCn()` 的标的参与（空日期不计入）。
+ * 行情会话日盈亏（证券）：沪深/港股仅统计北京时间今天；美股统计所有美股持仓中
+ * 最新的有效交易日。空日期不计入，且不同美股交易日不会混在同一次汇总中。
  * 单价涨跌由 `change_percent` + `current_price` 反推（`change_amount` 精度不足，见下）；
  * 股数用 `mapSecurityQuantityBeforeFirstEditToday`（当日减仓按日初股数）。
  */
@@ -219,13 +496,31 @@ export function computeTodayStockPnL(
     quantity: number;
     currentPrice: number | null;
     changePercent: number | null;
-    /** Juhe 行情会话日 `YYYY-MM-DD`（北京）；≠ 今天则不参与今日盈亏 */
+    market?: "hs" | "hk" | "us" | null;
+    /** Juhe 行情会话日 `YYYY-MM-DD` */
     changeQuoteDate?: string | null;
   }>,
   baseCurrency: string
-): { totalBase: number; perAsset: Map<number, TodayPnLEntry> } {
+): {
+  totalBase: number;
+  perAsset: Map<number, TodayPnLEntry>;
+  sessionDates: { cnHk: string; us: string | null };
+} {
   const perAsset = new Map<number, TodayPnLEntry>();
   let totalBase = 0;
+  const today = todayCn();
+  const latestUsQuoteDate =
+    items
+      .filter(
+        (item) =>
+          item.market === "us" &&
+          item.quantity > 0 &&
+          item.changeQuoteDate != null &&
+          item.changeQuoteDate <= today
+      )
+      .map((item) => item.changeQuoteDate!)
+      .sort()
+      .at(-1) ?? null;
 
   const currentQtyById = new Map<number, number>();
   for (const it of items) {
@@ -240,7 +535,8 @@ export function computeTodayStockPnL(
     const qtyDayStart = qtyDayStartById.get(item.id) ?? (item.quantity ?? 0);
     if (qtyDayStart <= 0) continue;
 
-    if (!item.changeQuoteDate || item.changeQuoteDate !== todayCn()) {
+    const expectedQuoteDate = item.market === "us" ? latestUsQuoteDate : today;
+    if (!item.changeQuoteDate || item.changeQuoteDate !== expectedQuoteDate) {
       continue;
     }
 
@@ -263,6 +559,7 @@ export function computeTodayStockPnL(
     const todayPnLBase = convert(todayPnLNative, item.currency, baseCurrency) ?? 0;
     perAsset.set(item.id, {
       assetId: item.id,
+      quoteDate: item.changeQuoteDate,
       todayPriceChange,
       todayChangePct,
       todayPnLNative,
@@ -271,7 +568,11 @@ export function computeTodayStockPnL(
     totalBase += todayPnLBase;
   }
 
-  return { totalBase, perAsset };
+  return {
+    totalBase,
+    perAsset,
+    sessionDates: { cnHk: today, us: latestUsQuoteDate }
+  };
 }
 
 /**

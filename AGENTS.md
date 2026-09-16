@@ -72,17 +72,23 @@
 
 | 表 | 用途 |
 | --- | --- |
-| `asset` | 明细。证券用 `quantity` + `unit_cost` + `current_price` + `symbol`；多数其它类型用 `amount`。`change_*` 只服务证券今日盈亏。 |
+| `asset` | 明细。证券用 `quantity` + `unit_cost` + `current_price` + `symbol`；多数其它类型用 `amount`。`change_*` 只服务证券行情会话日盈亏。 |
 | `fx_rate` | 汇率缓存。`source`：`juhe` 或 `manual`。旧 `frankfurter` 下次成功刷新会被覆盖。 |
+| `fx_rate_history` | 每个币对每个整点最终生效的汇率观测；自动和手动汇率都会写入 |
 | `setting` | 键值：`base_currency`、两枚 AppKey、`last_stocks_refresh_at`、`last_fx_refresh_error`、`last_stocks_refresh_error` |
 | `asset_change` | create / update / delete；update 的 `field_changes` 为 JSON diff |
+| `portfolio_event` | 统一业务事件头：入金、消费、买卖、分红、清仓、资产增删、手动校准 |
+| `portfolio_event_leg` | 同一事件涉及的资产腿；用带符号金额/份额把证券和现金关联起来 |
 | `portfolio_snapshot` | 每日净资产快照，`UNIQUE(date, base_currency)`，写入即覆盖当天 |
+| `asset_valuation_daily` | 每日逐资产估值；固化原币价值、当时汇率、基准币价值与价格/成本字段 |
 | `stock_refresh_log` | 每次单股请求一条，约 30 天清理；不进 JSON 备份 |
 | `stock_price_daily` | 每标的每个**行情会话日**一条价格，供盈亏走势；在 JSON 备份里 |
 
-`change_quote_date`：接口 `date`（优先）或 `time` 解析出的北京 `YYYY-MM-DD`。解析不到就写 **null**，禁止回落成 `todayCn()`。空日期不计入今日盈亏。`change_updated_at` 是历史列，今日判定**不要再用它**。不要在 `migrateSchema` 里把 null 日期再填回去。
+`change_quote_date`：沪深/港股从接口 `date`（优先）或 `time` 解析；美股从 `ustime` 取交易月日、用 `chtime` 推断年份。解析不到就写 **null**，禁止回落成 `todayCn()`。空日期不计入行情会话日盈亏。`change_updated_at` 是历史列，判定**不要再用它**。不要在 `migrateSchema` 里把 null 日期再填回去。
 
-JSON 备份（`app/api/backup`）`version: 2` 导出：category / account / asset / fx_rate / setting / asset_change / portfolio_snapshot / **stock_price_daily**。不含 `stock_refresh_log`。覆盖模式会先 `DELETE` 日线、刷新日志和上述业务表（分类除外）再导入。旧备份无 `stock_price_daily` 仍可导入。
+JSON 备份（`app/api/backup`）`version: 4` 导出：category / account / asset / fx_rate / **fx_rate_history** / setting / asset_change / portfolio_event / portfolio_event_leg / portfolio_snapshot / **asset_valuation_daily** / stock_price_daily。不含 `stock_refresh_log`。覆盖模式会先删除事件腿、事件头、估值历史、汇率历史、日线、刷新日志和上述业务表（分类除外）再导入。旧版备份缺事件表、估值/汇率历史或 `stock_price_daily` 仍可导入；旧备份里的 `fx_rate` 会精确补成一个历史观测点。
+
+`portfolio_event` 从功能上线后开始可靠记录。旧 `asset_change` 无法确定多资产记录是否属于同一笔操作，禁止猜测关联或自动回填。业务 API 必须在更新资产的**同一个 SQLite 事务**里调用 `recordPortfolioEvent`；自动行情刷新不写业务事件。
 
 ---
 
@@ -102,6 +108,7 @@ JSON 备份（`app/api/backup`）`version: 2` 导出：category / account / asse
 - 三个币种只需 3 次请求（两两配对，接口返回双向）。
 - 自动：`shouldRefreshFxEvery8h`，看 `fx_rate` 里 `source != 'manual'` 的 `MAX(fetched_at)`。不是「每天 10:00 一次」。
 - `GET /api/fx?refresh=1` 强制。手动 `POST /api/fx` 写 `source=manual`。
+- 每次汇率写入必须同时更新 `fx_rate` 和 `fx_rate_history`；同一整点重复写以最后值为准。只读历史接口是 `GET /api/fx/history`。
 - Key 级 fatal（错误 Key、额度等）停止后续币对；单对网络失败会重试 3 次。
 - 整批失败写入 `setting.last_fx_refresh_error`，成功则删除。总览用它提示，不要只打 console。
 - `kickoffRatesRefresh()` 不阻塞 SSR；`ensureRates()` 仍存在但页面主路径已改用 kickoff + 调度器。
@@ -133,18 +140,18 @@ JSON 备份（`app/api/backup`）`version: 2` 导出：category / account / asse
 - 成功写入 `change_quote_date = quoteSessionYmd`（可为 null）。`stock_price_daily` 只用会话日，没有会话日就不要 upsert。
 - 整批 `updated_count === 0 && failed_count > 0` 时写 `last_stocks_refresh_error`；有成功则删除。
 
-`GET /api/stocks?refresh=1` 为强制（周末也会打接口）。`maxDuration = 300`。
+`GET /api/stocks?refresh=1` 为强制（周末也会打接口）；可传 `market=hs|hk|us` 只刷新单一市场，单市场刷新不得推进全局 `last_stocks_refresh_at`。`maxDuration = 300`。
 
-### 今日盈亏
+### 行情会话日盈亏
 
 以 `computeTodayStockPnL`（`lib/history.ts`）为准。
 
 规则：
 
-- 仅 `change_quote_date === todayCn()` 的标的进入汇总；空日期不计入。
+- 沪深/港股仅 `change_quote_date === todayCn()` 的标的进入汇总；美股取当前持仓中最新的有效 `change_quote_date`，并在 UI 明示该交易日。空日期不计入，不同美股交易日禁止混算。
 - 单价涨跌用落库的 `change_amount` / `change_percent`。
 - 股数用 `mapSecurityQuantityBeforeFirstEditToday`：从今日 `asset_change` 的 `quantity` diff 反推日初股数。当天减仓/清仓，已卖部分仍计入今日盈亏。没有变更日志则用当前股数。
-- 没有今日会话日（含休市）：总览「证券今日」和证券 KPI / 明细一律 **—**，不要渲染 `¥0.00`。
+- 没有可用会话日（含休市）：总览「证券当日」和证券 KPI / 明细一律 **—**，不要渲染 `¥0.00`。
 
 价格 sparkline：`listStockPriceHistory` 合并 `stock_price_daily`（优先）与 `asset_change` 里对 `current_price` 的修改。
 
@@ -174,11 +181,22 @@ JSON 备份（`app/api/backup`）`version: 2` 导出：category / account / asse
 
 改仓必须走这些 API（或至少写 `asset_change`），否则今日盈亏的日初股数还原会失败。
 
+## 现金流
+
+现金资产详情页 `CashFlowPanel` 提供入金 / 消费，调用 `POST /api/assets/[id]/cash-flow`：
+
+- 金额必须大于 0，原因必填；消费不可超过当前现金余额。
+- 更新余额与写日志在同一事务内完成，并刷新当日快照。
+- 记录复用 `asset_change`：除 `amount` diff 外，`field_changes` 还写入 `cash_flow_type`、带方向的 `cash_flow_amount` 和 `cash_flow_reason`。`listCashFlowEntries` 用它们还原现金流列表。
+- 同一事务还要写 `portfolio_event` 的 `cash_deposit` / `cash_expense` 与现金资产腿，供报表统一统计。
+
 ---
 
 ## 快照
 
-`ensureTodaySnapshot(baseCurrency)`：当天该基准货币一条，存在则更新净值。进程内 30s 节流，避免 SSR/HMR 把 SQLite fsync 打满。资产变更成功后也要调。不要每请求无节流地 `INSERT`。
+`recordSnapshot(baseCurrency)` 同一事务更新 `portfolio_snapshot`，并重写当天同基准币的 `asset_valuation_daily`，已删除资产不会残留在当天明细。`ensureTodaySnapshot(baseCurrency)` 带进程内 30s 节流，避免 SSR/HMR 把 SQLite fsync 打满；资产变更成功后仍调用它。汇率或股票行情实际更新成功后直接调用 `recordSnapshot`，确保估值历史使用新价格/汇率。
+
+`GET /api/valuation-history` 是逐资产估值只读接口；同时传 `from` / `to` 会返回 `summarizeFxImpact` 的汇率归因与两端数据覆盖标记。归因使用对称分解：平均原币敞口 × 汇率变化；新出现/消失的币种、缺失汇率和只有旧版总快照而没有逐资产明细的差额都放入 `unclassifiedBaseValueChange`，不要猜测或反推旧日明细。
 
 ---
 

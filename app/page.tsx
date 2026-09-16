@@ -15,7 +15,12 @@ import {
 } from "lucide-react";
 import { getDB, getSetting } from "@/lib/db";
 import { kickoffRatesRefresh, getLastFxRefreshAt, getLastFxRefreshError } from "@/lib/fx";
-import { kickoffStockPricesRefresh, getLastStocksRefreshAt, getLastStocksRefreshError } from "@/lib/stocks";
+import {
+  kickoffStockPricesRefresh,
+  getLastStocksRefreshAt,
+  getLastStocksRefreshError,
+  parseStockSymbol
+} from "@/lib/stocks";
 import { valueAll, type ValuedAsset } from "@/lib/valuation";
 import {
   computeTodayStockPnL,
@@ -69,8 +74,13 @@ export default async function DashboardPage() {
     (a) => a.category_code === "securities" && (a.quantity ?? 0) > 0
   );
   const hasSecuritiesForKpi = secForTodayKpi.length > 0;
+  const stockMarketByAssetId = new Map(
+    secForTodayKpi.map(
+      (asset) => [asset.id, parseStockSymbol(asset.symbol)?.market ?? null] as const
+    )
+  );
 
-  // 证券今日：computeTodayStockPnL 仅统计 change_quote_date 为今天的标的
+  // 沪深/港股取北京时间今天；美股取最近一个有效交易日。
   const todaySecPnL = computeTodayStockPnL(
     secForTodayKpi.map((a) => ({
       id: a.id,
@@ -78,6 +88,7 @@ export default async function DashboardPage() {
       quantity: a.quantity ?? 0,
       currentPrice: a.current_price,
       changePercent: a.change_percent,
+      market: stockMarketByAssetId.get(a.id),
       changeQuoteDate: a.change_quote_date
     })),
     baseCurrency
@@ -325,7 +336,7 @@ export default async function DashboardPage() {
               />
               <SummaryTile
                 icon={<CalendarClock className="h-3.5 w-3.5" />}
-                label="证券今日"
+                label="证券当日"
                 tone={
                   !hasTodayQuotes
                     ? "muted"
@@ -348,11 +359,11 @@ export default async function DashboardPage() {
                 hint={
                   !hasSecuritiesForKpi
                     ? "暂无证券持仓（或份额均为 0）"
-                    : weekend
-                      ? "休市"
-                      : hasTodayQuotes
-                        ? `${todaySecPnL.perAsset.size} 只`
-                        : "无今日行情"
+                    : hasTodayQuotes
+                      ? `${todaySecPnL.perAsset.size} 只`
+                      : weekend
+                        ? "休市或无可用会话日"
+                        : "无可用会话日"
                 }
               />
               <SummaryTile

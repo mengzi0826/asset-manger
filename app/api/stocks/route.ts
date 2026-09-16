@@ -13,10 +13,18 @@ export const maxDuration = 300;
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const refresh = url.searchParams.get("refresh") === "1";
+  const rawMarket = url.searchParams.get("market");
+  const market = rawMarket === "hs" || rawMarket === "hk" || rawMarket === "us"
+    ? rawMarket
+    : undefined;
+
+  if (rawMarket && !market) {
+    return NextResponse.json({ error: "market 只支持 hs / hk / us" }, { status: 400 });
+  }
 
   try {
     if (refresh) {
-      const result = await refreshStockPrices({ force: true });
+      const result = await refreshStockPrices({ force: true, market });
       return NextResponse.json({
         items: listSecuritiesForView(),
         last_refreshed_at: result.last_refreshed_at,

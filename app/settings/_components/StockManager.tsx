@@ -130,7 +130,8 @@ export function StockManager({
           <div>
             工作日北京时间 <span className="font-semibold text-ink-700">10:00</span> 与{" "}
             <span className="font-semibold text-ink-700">14:00</span> 后各自动刷新一次（已配置股票
-            AppKey 时生效）。周末自动跳过；手动刷新周末仍会请求，今日盈亏按接口返回的交易日计算。
+            AppKey 时生效）。周末自动跳过；手动刷新周末仍会请求。沪深/港股按今日、
+            美股按最近交易日计算当日盈亏。
           </div>
           <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-ink-400">
             <span>

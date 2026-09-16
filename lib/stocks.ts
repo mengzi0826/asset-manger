@@ -8,6 +8,7 @@ import {
   type AssetWithMeta
 } from "./db";
 import { getJuheStockAppKey } from "./juheKeys";
+import { recordSnapshot } from "./history";
 import {
   isWeekendBeijing,
   juheQuoteSessionYmdFromData,
@@ -27,8 +28,8 @@ import {
  *   - 香港股市：/finance/stock/hk?num=00001
  *   - 美国股市：/finance/stock/usa?gid=aapl
  * 数据延迟约数分钟；自动拉取在每日北京时间 10:00 与 14:00 两个锚点各最多一次（见 time.ts）。
- * 自动刷新在北京周六日直接跳过；手动 `force` 仍会请求。`change_quote_date` 为接口会话日，
- * 仅当它等于 `todayCn()` 时计入今日盈亏；解析不到则写 null，不假装成今天。
+ * 自动刷新在北京周六日直接跳过；手动 `force` 仍会请求。`change_quote_date` 为接口会话日；
+ * 沪深/港股按北京时间当天统计，美股按最近交易日统计。解析不到则写 null，不假装成今天。
  */
 
 const JUHE_STOCK_ENDPOINT: Record<StockMarket, string> = {
@@ -534,7 +535,7 @@ let refreshInFlight = false;
  * - 强制：只校验已配置「股票数据」用 AppKey
  */
 export async function refreshStockPrices(
-  opts: { force?: boolean } = {}
+  opts: { force?: boolean; market?: StockMarket } = {}
 ): Promise<StockRefreshResult> {
   const lastRefreshedAt = getSetting("last_stocks_refresh_at");
   const next_refresh_at = nextStockAutoRefreshIso();
@@ -599,7 +600,10 @@ export async function refreshStockPrices(
     }
   }
 
-  const assets = listSecuritiesWithSymbol();
+  const assets = listSecuritiesWithSymbol().filter((asset) => {
+    if (!opts.market) return true;
+    return parseStockSymbol(asset.symbol)?.market === opts.market;
+  });
   if (assets.length === 0) {
     return {
       last_refreshed_at: lastRefreshedAt,
@@ -703,8 +707,8 @@ export async function refreshStockPrices(
     items.push(base);
   }
 
-  // 仅在「本次实际调用过接口」的前提下，写最后刷新时间
-  if (updatedCount > 0 || failedCount > 0) {
+  // 仅完整刷新才能推进全局自动刷新时间；单市场手动刷新不能让其它市场被误判为已刷新。
+  if (!opts.market && (updatedCount > 0 || failedCount > 0)) {
     setSetting("last_stocks_refresh_at", nowCn());
   }
 
@@ -716,6 +720,14 @@ export async function refreshStockPrices(
     setSetting(SETTING_LAST_STOCKS_REFRESH_ERROR, batchError);
   } else if (updatedCount > 0) {
     removeSetting(SETTING_LAST_STOCKS_REFRESH_ERROR);
+  }
+
+  if (updatedCount > 0) {
+    try {
+      recordSnapshot((getSetting("base_currency") ?? "CNY").toUpperCase());
+    } catch (e: any) {
+      console.warn("[stocks] valuation snapshot after refresh failed:", e?.message ?? e);
+    }
   }
 
   console.log(

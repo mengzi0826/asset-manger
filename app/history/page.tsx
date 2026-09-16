@@ -12,6 +12,10 @@ const FIELD_LABELS: Record<string, string> = {
   currency: "货币",
   quantity: "份额",
   unit_cost: "买入均价",
+  dividend_amount: "本次分红到账",
+  cash_flow_type: "现金操作",
+  cash_flow_amount: "现金流金额",
+  cash_flow_reason: "现金流原因",
   current_price: "当前价",
   amount: "金额",
   annual_rate: "年化",
@@ -171,6 +175,8 @@ function SummaryCell({
 function renderValue(v: unknown, field: string): string {
   if (v == null || v === "") return "—";
   if (field === "start_date" || field === "maturity_date") return formatDate(String(v));
+  if (field === "cash_flow_type") return v === "deposit" ? "入金" : v === "expense" ? "消费" : String(v);
+  if (field === "dividend_amount" && typeof v === "number") return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
   if (typeof v === "number") return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
   return String(v);
 }

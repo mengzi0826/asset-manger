@@ -87,9 +87,11 @@ export interface SecuritiesPosition {
   pnlBase: number | null;
   /** 累计浮动盈亏率 */
   pnlPct: number | null;
-  /** 今日单价涨跌幅 */
+  /** 当前展示的行情会话日 */
+  quoteDate: string | null;
+  /** 行情会话日单价涨跌幅 */
   todayChangePct: number | null;
-  /** 今日盈亏（基准币） */
+  /** 行情会话日盈亏（基准币） */
   todayPnLBase: number | null;
   /** price history from asset_change: [{date, price}] */
   priceHistory: Array<{ date: string; price: number }>;
@@ -560,7 +562,7 @@ export function PnLCard({
 
 /**
  * 单行持仓的多列布局。列从左到右：
- *   名称（含代码）/ 市值 / 今日% / 今日盈亏 / 总% / 总盈亏 / sparkline
+ *   名称（含代码）/ 市值 / 当日% / 当日盈亏 / 总% / 总盈亏 / sparkline
  * 用 CSS grid 保证多行间列对齐。
  */
 const ROW_GRID =
@@ -596,11 +598,11 @@ function PositionRow({ p, isDark }: { p: SecuritiesPosition; isDark: boolean }) 
         {compact(p.baseValue)}
       </div>
 
-      {/* 今日 % */}
+      {/* 行情会话日 % */}
       <div className={`text-right tabular ${colorClass(todayUp, hasToday)}`}>
         {hasToday ? pctStr(p.todayChangePct!, 2) : "—"}
       </div>
-      {/* 今日 盈亏（基准币） */}
+      {/* 行情会话日盈亏（基准币） */}
       <div className={`text-right tabular ${colorClass(todayUp, hasToday)}`}>
         {hasToday && p.todayPnLBase != null
           ? (p.todayPnLBase >= 0 ? "+" : "") + compact(p.todayPnLBase)
@@ -637,8 +639,8 @@ function PositionHeaderRow() {
     >
       <div>名称</div>
       <div className="text-right">市值</div>
-      <div className="text-right">今日%</div>
-      <div className="text-right">今日</div>
+      <div className="text-right">当日%</div>
+      <div className="text-right">当日</div>
       <div className="text-right">总%</div>
       <div className="text-right">总盈亏</div>
       <div className="text-right">走势</div>
@@ -669,7 +671,12 @@ function MarketGroupedDetail({
       {MARKET_ORDER.map((m) => {
         const list = groups.get(m)!;
         if (list.length === 0) return null;
-        // 组内若有任一标的带「今日」数据则汇总今日；否则今日显示 —
+        const sessionDate = list
+          .map((p) => p.quoteDate)
+          .filter((date): date is string => date != null)
+          .sort()
+          .at(-1);
+        // 组内若有任一标的带行情会话日数据则汇总；否则显示 —
         const hasTodayInGroup = list.some((p) => p.todayChangePct != null);
         const todayBaseSum = hasTodayInGroup
           ? list.reduce((s, p) => s + (p.todayPnLBase ?? 0), 0)
@@ -685,9 +692,14 @@ function MarketGroupedDetail({
                 {m}
               </span>
               <span className="text-[10px] text-ink-300">{list.length} 只</span>
+              <span className="text-[10px] tabular text-ink-400">
+                {sessionDate
+                  ? `${m === "美股" ? "最近交易日" : "交易日"} ${sessionDate}`
+                  : "暂无会话日"}
+              </span>
               <span className="ml-auto flex items-baseline gap-3 text-[10px]">
                 <span className="text-ink-400">
-                  今日{" "}
+                  当日{" "}
                   {todayBaseSum == null ? (
                     <span className="tabular font-medium text-ink-400">—</span>
                   ) : (

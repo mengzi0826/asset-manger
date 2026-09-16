@@ -34,6 +34,79 @@ function initDB(): Database.Database {
 
 /** 对老库做幂等的字段补齐，避免删库重建 */
 function migrateSchema(db: Database.Database) {
+  // 汇率与逐资产估值历史：不从组合总额反推旧日明细，只精确回填当前 fx_rate 的已有观测点。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS fx_rate_history (
+      base TEXT NOT NULL,
+      quote TEXT NOT NULL,
+      rate REAL NOT NULL,
+      source TEXT NOT NULL,
+      observed_at TEXT NOT NULL,
+      PRIMARY KEY (base, quote, observed_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_fx_rate_history_time
+      ON fx_rate_history(observed_at DESC);
+    INSERT OR IGNORE INTO fx_rate_history (base, quote, rate, source, observed_at)
+      SELECT base, quote, rate, source, fetched_at
+      FROM fx_rate
+      WHERE rate > 0 AND fetched_at IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS asset_valuation_daily (
+      date TEXT NOT NULL,
+      base_currency TEXT NOT NULL,
+      asset_id INTEGER NOT NULL,
+      account_id INTEGER NOT NULL,
+      asset_name TEXT NOT NULL,
+      category_code TEXT NOT NULL,
+      currency TEXT NOT NULL,
+      quantity REAL,
+      unit_cost REAL,
+      unit_price REAL,
+      amount REAL,
+      native_value REAL NOT NULL,
+      fx_rate REAL,
+      base_value REAL NOT NULL,
+      captured_at TEXT NOT NULL,
+      PRIMARY KEY (date, base_currency, asset_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_asset_valuation_base_date
+      ON asset_valuation_daily(base_currency, date ASC);
+    CREATE INDEX IF NOT EXISTS idx_asset_valuation_asset
+      ON asset_valuation_daily(asset_id, date ASC);
+  `);
+  // 统一事件层：旧库及 HMR 长连接都需幂等补表；资产引用故意不设外键，以保留已删除资产的历史。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS portfolio_event (
+      id INTEGER PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      currency TEXT NOT NULL,
+      gross_amount REAL,
+      reason TEXT,
+      source TEXT NOT NULL DEFAULT 'user',
+      metadata TEXT,
+      occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now', '+8 hours') || '+08:00')
+    );
+    CREATE INDEX IF NOT EXISTS idx_portfolio_event_time ON portfolio_event(occurred_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_portfolio_event_type ON portfolio_event(event_type, occurred_at DESC);
+    CREATE TABLE IF NOT EXISTS portfolio_event_leg (
+      id INTEGER PRIMARY KEY,
+      event_id INTEGER NOT NULL REFERENCES portfolio_event(id) ON DELETE CASCADE,
+      asset_id INTEGER,
+      account_id INTEGER,
+      asset_name TEXT NOT NULL,
+      role TEXT NOT NULL,
+      amount_delta REAL,
+      amount_after REAL,
+      quantity_delta REAL,
+      quantity_after REAL,
+      unit_price REAL,
+      unit_cost_after REAL,
+      metadata TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_portfolio_event_leg_event ON portfolio_event_leg(event_id, id);
+    CREATE INDEX IF NOT EXISTS idx_portfolio_event_leg_asset ON portfolio_event_leg(asset_id, event_id DESC);
+  `);
   // stock_price_daily：首次创建后从 stock_refresh_log 回填已有成功记录
   const spd = db.prepare("PRAGMA table_info(stock_price_daily)").all() as Array<{ name: string }>;
   if (spd.length === 0) {
@@ -209,6 +282,32 @@ export interface FxRate {
   rate: number;
   source: string;
   fetched_at: string;
+}
+
+export interface FxRateHistory {
+  base: string;
+  quote: string;
+  rate: number;
+  source: string;
+  observed_at: string;
+}
+
+export interface AssetValuationDaily {
+  date: string;
+  base_currency: string;
+  asset_id: number;
+  account_id: number;
+  asset_name: string;
+  category_code: CategoryCode;
+  currency: string;
+  quantity: number | null;
+  unit_cost: number | null;
+  unit_price: number | null;
+  amount: number | null;
+  native_value: number;
+  fx_rate: number | null;
+  base_value: number;
+  captured_at: string;
 }
 
 /** 最近一次汇率自动拉取失败原因；成功则删除 */

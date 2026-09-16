@@ -83,9 +83,74 @@ export function parseLooseCalendarYmdToBeijing(raw: string): string | null {
   return null;
 }
 
+const EN_MONTH_INDEX: Record<string, number> = {
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12
+};
+
+function validCalendarYmd(year: number, month: number, day: number): string | null {
+  const d = new Date(Date.UTC(year, month - 1, day));
+  if (
+    d.getUTCFullYear() !== year ||
+    d.getUTCMonth() + 1 !== month ||
+    d.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
 /**
- * Juhe 股票 data 体：优先 `date`（通常为**交易日**），没有再解析 `time`。
- * 用于判断「涨跌额」是否属于北京时区下的**今天**。
+ * 聚合美股接口没有 `date` / `time`，交易会话时间放在 `ustime`，例如
+ * `Mar 11 4:00PM EDT`；年份从同时返回的北京时间 `chtime` 推断。
+ */
+function parseJuheUsSessionYmd(data: Record<string, unknown>): string | null {
+  const raw = String(data.ustime ?? "").trim();
+  if (!raw) return null;
+
+  // 兼容接口未来直接返回完整年月日的情况。
+  const fullYmd = parseLooseCalendarYmdToBeijing(raw);
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(raw) && fullYmd) return fullYmd;
+
+  const match = raw.match(
+    /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/i
+  );
+  if (!match) return null;
+  const month = EN_MONTH_INDEX[match[1].toLowerCase()];
+  const day = Number(match[2]);
+  const explicitYear = match[3] ? Number(match[3]) : null;
+  if (explicitYear != null) return validCalendarYmd(explicitYear, month, day);
+
+  const chinaYmd = parseLooseCalendarYmdToBeijing(String(data.chtime ?? ""));
+  const referenceYmd = chinaYmd ?? todayCn();
+  const [referenceYear, referenceMonth, referenceDay] = referenceYmd.split("-").map(Number);
+  const referenceMs = Date.UTC(referenceYear, referenceMonth - 1, referenceDay);
+
+  // 跨年时北京时间可能已是 1 月 1 日，而美股会话仍是上一年 12 月 31 日。
+  // 在参考年份前后各取一年，选择离北京时间日期最近的合法日历日。
+  let best: { ymd: string; distance: number } | null = null;
+  for (const year of [referenceYear - 1, referenceYear, referenceYear + 1]) {
+    const ymd = validCalendarYmd(year, month, day);
+    if (!ymd) continue;
+    const distance = Math.abs(Date.UTC(year, month - 1, day) - referenceMs);
+    if (!best || distance < best.distance) best = { ymd, distance };
+  }
+  return best?.ymd ?? null;
+}
+
+/**
+ * Juhe 股票 data 体：优先 `date`（通常为**交易日**），其次解析 `time`；
+ * 美股接口改读 `ustime`，并用 `chtime` 推断年份。
  */
 export function juheQuoteSessionYmdFromData(data: Record<string, unknown>): string | null {
   const rawDate = data.date;
@@ -107,7 +172,10 @@ export function juheQuoteSessionYmdFromData(data: Record<string, unknown>): stri
     const fromStr = parseLooseCalendarYmdToBeijing(String(rawDate));
     if (fromStr) return fromStr;
   }
-  return parseJuheDataTimeToBeijingYmd(data.time as string | number | undefined | null);
+  const fromTime = parseJuheDataTimeToBeijingYmd(
+    data.time as string | number | undefined | null
+  );
+  return fromTime ?? parseJuheUsSessionYmd(data);
 }
 
 /**

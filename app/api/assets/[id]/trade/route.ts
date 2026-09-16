@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDB, type AssetRow, getSetting } from "@/lib/db";
 import { logAssetChange, ensureTodaySnapshot } from "@/lib/history";
+import { recordPortfolioEvent, type PortfolioEventLegInput } from "@/lib/portfolioEvents";
 import { nowCn } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -108,6 +109,20 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       const securityAfter = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
       logAssetChange({ action: "update", before: securityBefore, after: securityAfter });
 
+      const quantityDelta = parsed.side === "buy" ? qtyDelta : -qtyDelta;
+      const eventLegs: PortfolioEventLegInput[] = [
+        {
+          assetId: securityAfter.id,
+          accountId: securityAfter.account_id,
+          assetName: securityAfter.name,
+          role: "security",
+          quantityDelta,
+          quantityAfter: securityAfter.quantity,
+          unitPrice: parsed.price,
+          unitCostAfter: securityAfter.unit_cost
+        }
+      ];
+
       if (cash) {
         const cashBefore = db.prepare("SELECT * FROM asset WHERE id = ?").get(cash.id) as AssetRow;
         const nextAmount =
@@ -117,7 +132,24 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         ).run({ id: cash.id, amount: nextAmount, updated_at: now });
         const cashAfter = db.prepare("SELECT * FROM asset WHERE id = ?").get(cash.id) as AssetRow;
         logAssetChange({ action: "update", before: cashBefore, after: cashAfter });
+        eventLegs.push({
+          assetId: cashAfter.id,
+          accountId: cashAfter.account_id,
+          assetName: cashAfter.name,
+          role: "cash",
+          amountDelta: parsed.side === "buy" ? -tradeValue : tradeValue,
+          amountAfter: cashAfter.amount
+        });
       }
+
+      recordPortfolioEvent({
+        type: parsed.side === "buy" ? "security_buy" : "security_sell",
+        currency: securityAfter.currency,
+        grossAmount: tradeValue,
+        occurredAt: now,
+        metadata: { cash_linked: Boolean(cash) },
+        legs: eventLegs
+      });
 
       return securityAfter;
     });
