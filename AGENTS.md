@@ -217,6 +217,16 @@ JSON 备份（`app/api/backup`）`version: 4` 导出：category / account / asse
 
 ---
 
+## 本地 AI 助手
+
+- Ollama 默认地址 `http://127.0.0.1:11434`，默认模型 `qwen3.5:latest`；只能经 `OLLAMA_BASE_URL` / `OLLAMA_MODEL` 等环境变量覆盖，不要把远端服务或凭证写死。
+- `POST /api/ai` 只接受当前 `action` 与当前问题，不接受历史消息。每次请求由 `lib/ai/context.ts` 重新生成最新只读资产上下文；禁止把浏览器聊天历史发给模型。
+- AI 上下文不得包含 `setting` 中的 AppKey、资产备注或其它凭证。模型没有写库工具；不要从 AI 路由调用资产写 API、`recordPortfolioEvent`、`recordSnapshot` 或 setting 写方法。
+- Ollama 输出由 API 转成纯文本流。前端历史只存在 `localStorage`，清空对话不得动 SQLite。
+- 事件层和逐资产估值覆盖之前的数据缺口必须原样告诉模型，禁止反推旧历史。程序先计算净值、比例、事件和汇率归因，模型只负责解释。
+
+---
+
 ## UI / API 习惯
 
 - 导航：总览 / 资产 / 证券 / 历史 / 设置。点当前项会 `router.refresh()`。

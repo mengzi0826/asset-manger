@@ -4,6 +4,7 @@ import "./globals.css";
 import { TopNav } from "@/components/TopNav";
 import { ThemeProvider, type Theme } from "@/lib/themeContext";
 import { startAutoRefreshScheduler } from "@/lib/autoRefresh";
+import { AiAssistant } from "@/components/ai/AiAssistant";
 
 export const metadata: Metadata = {
   title: "资产管家",
@@ -68,6 +69,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span className="mx-2 text-hair-strong">·</span>
               <span>本地优先 · 数据仅保存在本机 SQLite</span>
             </footer>
+            <AiAssistant />
           </div>
         </ThemeProvider>
       </body>

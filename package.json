@@ -4,9 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 3000",
+    "dev:3001": "next dev -H 127.0.0.1 -p 3001",
     "build": "next build",
     "start": "next start -H 127.0.0.1 -p 3000",
-    "lint": "next lint"
+    "lint": "next lint",
+    "ai:test": "node scripts/test-ollama.mjs",
+    "ai:smoke": "node scripts/test-ai-readonly.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",

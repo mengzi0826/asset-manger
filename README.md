@@ -25,6 +25,8 @@
 
 **设置** — 基准货币（CNY / USD）、聚合数据 AppKey、汇率刷新或手动覆盖、股票价格刷新与失败日志、JSON 备份导入导出。
 
+**智能助手** — 页面右侧可上下拖动的本地 AI 入口。支持单轮只读问答、资产体检、日报、周报和月报；对话记录仅保存在浏览器本地，不会交给模型作为上下文。模型读取最新资产、事件、快照、汇率归因和行情数据，但没有任何写库能力。
+
 深浅色主题；涨跌颜色按中国市场惯例：**红涨绿跌**。
 
 ---
@@ -52,6 +54,31 @@ npm run start
 改端口：编辑 `package.json` 里 `dev` / `start` 的 `-p`。
 
 macOS 若报 `EMFILE: too many open files`，先执行 `ulimit -n 10240` 再启动。
+
+### 本地模型调用 Demo
+
+已安装并启动 Ollama 后，可以先用独立脚本验证 Node 代码能否调用本地模型。这个测试只发送一条短提示词，不读取资产数据库：
+
+```bash
+npm run ai:test
+```
+
+默认连接 `http://127.0.0.1:11434`，调用 `qwen3.5:latest`。模型标签、服务地址和提示词都可以覆盖：
+
+```bash
+OLLAMA_MODEL=qwen3.5:latest npm run ai:test -- "用一句话介绍你自己"
+OLLAMA_BASE_URL=http://127.0.0.1:11434 npm run ai:test
+```
+
+Demo 默认关闭思考模式，以便快速验证正文响应；设置 `OLLAMA_THINK=true` 可以开启。首次调用需要把模型加载进内存，可能比后续调用慢。超时时间和最大输出 token 可分别通过 `OLLAMA_TIMEOUT_MS`、`OLLAMA_NUM_PREDICT` 调整。
+
+智能助手默认使用相同的 Ollama 地址和模型。开发时若要另起测试端口：
+
+```bash
+npm run dev:3001
+```
+
+可选环境变量：`OLLAMA_BASE_URL`、`OLLAMA_MODEL`、`OLLAMA_TIMEOUT_MS`、`OLLAMA_NUM_PREDICT`、`OLLAMA_NUM_CTX`。默认模型是 `qwen3.5:latest`。
 
 ---
 
