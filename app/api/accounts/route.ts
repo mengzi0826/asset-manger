@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDB } from "@/lib/db";
+import { allocateEntityId } from "@/lib/identity";
+import { nowCn } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
@@ -22,12 +24,15 @@ export async function POST(req: Request) {
     const body = await req.json();
     const parsed = accountSchema.parse(body);
     const db = getDB();
-    const res = db
+    const account = db.transaction(() => {
+      const id = allocateEntityId(db, "account");
+      db
       .prepare(
-        "INSERT INTO account (category_id, name, institution, notes) VALUES (?, ?, ?, ?)"
+        "INSERT INTO account (id, category_id, name, institution, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)"
       )
-      .run(parsed.category_id, parsed.name, parsed.institution ?? null, parsed.notes ?? null);
-    const account = db.prepare("SELECT * FROM account WHERE id = ?").get(res.lastInsertRowid);
+      .run(id, parsed.category_id, parsed.name, parsed.institution ?? null, parsed.notes ?? null, nowCn());
+      return db.prepare("SELECT * FROM account WHERE id = ?").get(id);
+    })();
     return NextResponse.json({ account }, { status: 201 });
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? "Invalid" }, { status: 400 });

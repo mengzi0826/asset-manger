@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getDB, type AssetRow, getSetting } from "@/lib/db";
-import { logAssetChange, ensureTodaySnapshot } from "@/lib/history";
+import { getDB, type AssetRow } from "@/lib/db";
+import { logAssetChange } from "@/lib/history";
 import { recordPortfolioEvent } from "@/lib/portfolioEvents";
+import { portfolioTransaction } from "@/lib/portfolioMutations";
 import { nowCn } from "@/lib/time";
 import { computeAssetValue } from "@/lib/valuation";
 
@@ -74,14 +75,16 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (keys.length === 0) return NextResponse.json({ asset: before });
     const sets = keys.map((k) => `${k} = @${k}`).join(", ");
     const now = nowCn();
-    const run = db.transaction(() => {
+    const run = portfolioTransaction(() => {
+      const beforeCategory = db.prepare(`SELECT c.code FROM account acc JOIN category c ON c.id = acc.category_id WHERE acc.id = ?`)
+        .get(before.account_id) as { code: string };
       db.prepare(
         `UPDATE asset SET ${sets}, updated_at = @__updated_at WHERE id = @id`
       ).run({ ...patch, id, __updated_at: now });
       const after = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
       logAssetChange({ action: "update", before, after });
 
-      const economicFields = ["amount", "quantity", "unit_cost", "current_price"] as const;
+      const economicFields = ["amount", "quantity", "unit_cost", "current_price", "currency", "account_id", "symbol"] as const;
       const changedEconomicFields = economicFields.filter((key) => before[key] !== after[key]);
       if (changedEconomicFields.length > 0) {
         const category = db
@@ -107,7 +110,17 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
                 : null,
           reason: "手动编辑资产",
           occurredAt: now,
-          metadata: { fields: changedEconomicFields },
+          metadata: {
+            classification: "record_adjustment",
+            native_value_before: computeAssetValue(before),
+            native_value_after: computeAssetValue(after),
+            category_before: beforeCategory.code,
+            category_after: category?.code ?? null,
+            currency_before: before.currency,
+            currency_after: after.currency,
+            fields: changedEconomicFields,
+            changes: Object.fromEntries(changedEconomicFields.map(key => [key, { from: before[key], to: after[key] }]))
+          },
           legs: [
             {
               assetId: after.id,
@@ -127,7 +140,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       return after;
     });
     const after = run();
-    ensureTodaySnapshot(getSetting("base_currency") ?? "CNY");
     return NextResponse.json({ asset: after });
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? "Invalid" }, { status: 400 });
@@ -141,7 +153,7 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
   const before = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow | undefined;
   if (!before) return NextResponse.json({ error: "not found" }, { status: 404 });
   const now = nowCn();
-  const run = db.transaction(() => {
+  const run = portfolioTransaction(() => {
     const category = db
       .prepare(
         `SELECT c.code FROM account acc
@@ -176,6 +188,5 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
     logAssetChange({ action: "delete", before });
   });
   run();
-  ensureTodaySnapshot(getSetting("base_currency") ?? "CNY");
   return NextResponse.json({ ok: true });
 }

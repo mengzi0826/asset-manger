@@ -86,9 +86,11 @@
 
 `change_quote_date`：沪深/港股从接口 `date`（优先）或 `time` 解析；美股从 `ustime` 取交易月日、用 `chtime` 推断年份。解析不到就写 **null**，禁止回落成 `todayCn()`。空日期不计入行情会话日盈亏。`change_updated_at` 是历史列，判定**不要再用它**。不要在 `migrateSchema` 里把 null 日期再填回去。
 
-JSON 备份（`app/api/backup`）`version: 4` 导出：category / account / asset / fx_rate / **fx_rate_history** / setting / asset_change / portfolio_event / portfolio_event_leg / portfolio_snapshot / **asset_valuation_daily** / stock_price_daily。不含 `stock_refresh_log`。覆盖模式会先删除事件腿、事件头、估值历史、汇率历史、日线、刷新日志和上述业务表（分类除外）再导入。旧版备份缺事件表、估值/汇率历史或 `stock_price_daily` 仍可导入；旧备份里的 `fx_rate` 会精确补成一个历史观测点。
+JSON 备份（`app/api/backup`）`version: 5` 导出：category / account / asset / fx_rate / **fx_rate_history** / setting / asset_change / portfolio_event / portfolio_event_leg / portfolio_snapshot / **asset_valuation_daily** / stock_price_daily / **entity_id_sequence** / **history_integrity**。不含 `stock_refresh_log`。覆盖模式会先删除事件腿、事件头、估值历史、汇率历史、日线、刷新日志和上述业务表（分类、身份高水位和覆盖元数据除外）再导入。旧版备份缺事件表、估值/汇率历史或 `stock_price_daily` 仍可导入；旧备份里的 `fx_rate` 会精确补成一个历史观测点。
 
-`portfolio_event` 从功能上线后开始可靠记录。旧 `asset_change` 无法确定多资产记录是否属于同一笔操作，禁止猜测关联或自动回填。业务 API 必须在更新资产的**同一个 SQLite 事务**里调用 `recordPortfolioEvent`；自动行情刷新不写业务事件。
+`portfolio_event` 从功能上线后开始可靠记录。旧 `asset_change` 无法确定多资产记录是否属于同一笔操作，禁止猜测关联或自动回填。业务 API 必须在更新资产的**同一个 SQLite 事务**里调用 `recordPortfolioEvent`；通过 `lib/portfolioMutations.ts` 的 `portfolioTransaction` 同时提交当天快照，快照失败必须回滚业务。账户删除/分类调整也要逐资产留痕。自动行情刷新不写业务事件。
+
+新增资产/账户必须在业务事务内经 `lib/identity.ts` 的 `allocateEntityId` 分配 ID；`entity_id_sequence` 高水位覆盖当前与历史引用，禁止随删除或覆盖导入清空/降低，不破坏性重建旧表。不能自动修复已有疑似身份冲突。导入后同步高水位并重置 `history_integrity` 的可靠记录起点；首条事件不代表覆盖完整，系统记录覆盖也不证明现实操作全已录入。
 
 ---
 
@@ -150,8 +152,10 @@ JSON 备份（`app/api/backup`）`version: 4` 导出：category / account / asse
 
 - 沪深/港股仅 `change_quote_date === todayCn()` 的标的进入汇总；美股取当前持仓中最新的有效 `change_quote_date`，并在 UI 明示该交易日。空日期不计入，不同美股交易日禁止混算。
 - 单价涨跌用落库的 `change_amount` / `change_percent`。
-- 股数用 `mapSecurityQuantityBeforeFirstEditToday`：从今日 `asset_change` 的 `quantity` diff 反推日初股数。当天减仓/清仓，已卖部分仍计入今日盈亏。没有变更日志则用当前股数。
-- 没有可用会话日（含休市）：总览「证券当日」和证券 KPI / 明细一律 **—**，不要渲染 `¥0.00`。
+- 股数用 `mapSecurityQuantityBeforeFirstEditToday`：从今日 `asset_change` 的 `quantity` diff 反推日初股数。当天减仓/清仓，已卖部分仍计入今日盈亏。已删除证券由当日删除日志的分类/行情快照补入候选；缺分类依据的旧日志不猜测。没有变更日志则用当前股数。
+- 没有可用会话日（含休市）：`availableTotalBase = null`，缺汇率不按 0 计入；`status` 区分 complete / partial / unavailable。总览「证券当日」和证券 KPI / 明细一律 **—**，不要渲染 `¥0.00`。
+
+`listSnapshots` 的数量参数表示最近 N 个观测点（返回日期正序）；`GET /api/history` 支持 from/to 区间及汇总，证券市值曲线保留清仓后的零值。
 
 价格 sparkline：`listStockPriceHistory` 合并 `stock_price_daily`（优先）与 `asset_change` 里对 `current_price` 的修改。
 
@@ -194,9 +198,11 @@ JSON 备份（`app/api/backup`）`version: 4` 导出：category / account / asse
 
 ## 快照
 
-`recordSnapshot(baseCurrency)` 同一事务更新 `portfolio_snapshot`，并重写当天同基准币的 `asset_valuation_daily`，已删除资产不会残留在当天明细。`ensureTodaySnapshot(baseCurrency)` 带进程内 30s 节流，避免 SSR/HMR 把 SQLite fsync 打满；资产变更成功后仍调用它。汇率或股票行情实际更新成功后直接调用 `recordSnapshot`，确保估值历史使用新价格/汇率。
+`recordSnapshot(baseCurrency)` 的 `created_at` 随覆盖更新为最近采集时点，同一事务更新 `portfolio_snapshot`，并重写当天同基准币的 `asset_valuation_daily`，已删除资产不会残留在当天明细。`ensureTodaySnapshot(baseCurrency)` 带进程内 30s 节流，避免 SSR/HMR 把 SQLite fsync 打满；它只用于页面读取；业务变更通过 `portfolioTransaction` 在同一事务内调用 `recordSnapshot`，禁止使用节流写入。汇率或股票行情实际更新成功后直接调用 `recordSnapshot`，确保估值历史使用新价格/汇率。
 
 `GET /api/valuation-history` 是逐资产估值只读接口；同时传 `from` / `to` 会返回 `summarizeFxImpact` 的汇率归因与两端数据覆盖标记。归因使用对称分解：平均原币敞口 × 汇率变化；新出现/消失的币种、缺失汇率和只有旧版总快照而没有逐资产明细的差额都放入 `unclassifiedBaseValueChange`，不要猜测或反推旧日明细。
+
+总览与净值曲线的变化明细共用 `lib/netWorthHistory.ts` / `lib/netWorthChange.ts`。优先较昨日，缺昨日时标注上次快照日期；入金等原币项目按两端平均汇率折算，与对称汇率分解对账。证券盈亏用端点市值减去成交本金变动（含清仓），不要用行情会话日盈亏替代；未关联现金的本金变动单列。事件读取不得分页截断，可靠事件记录之前的证券变化、缺估值/汇率等差额保留未归因，不反推利息。新手动校准事件需在 metadata 保留原币估值、分类与币种的 before/after，供归因使用。验证：`node scripts/test-net-worth-change.cjs`。
 
 ---
 
@@ -224,6 +230,9 @@ JSON 备份（`app/api/backup`）`version: 4` 导出：category / account / asse
 - AI 上下文不得包含 `setting` 中的 AppKey、资产备注或其它凭证。模型没有写库工具；不要从 AI 路由调用资产写 API、`recordPortfolioEvent`、`recordSnapshot` 或 setting 写方法。
 - Ollama 输出由 API 转成纯文本流。前端历史只存在 `localStorage`，清空对话不得动 SQLite。
 - 事件层和逐资产估值覆盖之前的数据缺口必须原样告诉模型，禁止反推旧历史。程序先计算净值、比例、事件和汇率归因，模型只负责解释。
+- 历史区间由 `lib/analysisPeriod.ts` 解析、`lib/analytics.ts` 统一计算实际快照端点；过去区间不得混用当前估值。常见日期可直接问，模糊/多区间表达返回澄清。
+- 事件汇总不受明细分页限制；现金流用业务时点之前的历史汇率，缺失返回 null。JSON 上下文保留 null，不把缺数据解释成 0。
+- 收益维持用户录入的券商均价口径，不另建独立真实收益账。分红可能已调整成本，禁止将分红再次直接加到浮盈；费用、税费、未关联现金的完整性必须说明。
 
 ---
 

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDB, type AssetRow } from "@/lib/db";
-import { logAssetChange, ensureTodaySnapshot } from "@/lib/history";
-import { listAssetsWithMeta } from "@/lib/valuation";
-import { getSetting } from "@/lib/db";
+import { logAssetChange } from "@/lib/history";
+import { allocateEntityId } from "@/lib/identity";
+import { computeAssetValue, listAssetsWithMeta } from "@/lib/valuation";
 import { recordPortfolioEvent, type PortfolioEventLegInput } from "@/lib/portfolioEvents";
+import { portfolioTransaction } from "@/lib/portfolioMutations";
 import { nowCn } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -121,14 +122,15 @@ export async function POST(req: Request) {
       }
     }
 
-    const run = db.transaction(() => {
+    const run = portfolioTransaction(() => {
       const res = db
         .prepare(
           `INSERT INTO asset
-           (account_id, name, symbol, currency, quantity, unit_cost, current_price, amount, annual_rate, start_date, maturity_date, notes, created_at, updated_at)
-           VALUES (@account_id, @name, @symbol, @currency, @quantity, @unit_cost, @current_price, @amount, @annual_rate, @start_date, @maturity_date, @notes, @created_at, @updated_at)`
+           (id, account_id, name, symbol, currency, quantity, unit_cost, current_price, amount, annual_rate, start_date, maturity_date, notes, created_at, updated_at)
+           VALUES (@id, @account_id, @name, @symbol, @currency, @quantity, @unit_cost, @current_price, @amount, @annual_rate, @start_date, @maturity_date, @notes, @created_at, @updated_at)`
         )
         .run({
+          id: allocateEntityId(db, "asset"),
           account_id: parsed.account_id,
           name: parsed.name,
           symbol: parsed.symbol ? String(parsed.symbol).toUpperCase() : null,
@@ -159,10 +161,7 @@ export async function POST(req: Request) {
       }
 
       const isSecurity = targetAccount.category_code === "securities";
-      const assetValue =
-        created.amount != null
-          ? created.amount
-          : (created.quantity ?? 0) * (created.current_price ?? created.unit_cost ?? 0);
+      const assetValue = computeAssetValue(created);
       const eventLegs: PortfolioEventLegInput[] = [
         {
           assetId: created.id,
@@ -203,7 +202,6 @@ export async function POST(req: Request) {
     });
 
     const asset = run();
-    ensureTodaySnapshot(getSetting("base_currency") ?? "CNY");
     return NextResponse.json({ asset }, { status: 201 });
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? "Invalid" }, { status: 400 });

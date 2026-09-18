@@ -39,7 +39,12 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const parsed = requestSchema.parse(await req.json());
-    const { messages } = buildAiMessages(parsed.action, parsed.message);
+    const { messages, context } = buildAiMessages(parsed.action, parsed.message);
+    if (context.meta.period.clarification) {
+      return new Response(context.meta.period.clarification, {
+        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }
+      });
+    }
     const promptChars = messages.reduce((sum, message) => sum + message.content.length, 0);
     const { response, model } = await requestOllamaChatStream(messages, {
       numPredict: OUTPUT_BUDGET[parsed.action]

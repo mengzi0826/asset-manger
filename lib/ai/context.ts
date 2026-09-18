@@ -1,16 +1,20 @@
 import "server-only";
-import { format, parseISO, startOfMonth, subDays } from "date-fns";
-import { getDB, getSetting, type CategoryCode, type PortfolioSnapshot } from "../db";
+import { format, parseISO, subDays } from "date-fns";
+import { getDB, getSetting, type CategoryCode } from "../db";
 import { buildSuggestions } from "../advisor";
 import { convert, listRates } from "../fx";
 import { computeTodayStockPnL, summarizeFxImpact } from "../history";
 import {
   getPortfolioEventCoverage,
   listPortfolioEvents,
+  summarizePortfolioEvents,
+  summarizeCashFlow,
   type PortfolioEventType
 } from "../portfolioEvents";
 import { parseStockSymbol } from "../stocks";
 import { nowCn, todayCn } from "../time";
+import { resolveAnalysisPeriod } from "../analysisPeriod";
+import { summarizePortfolioPeriod } from "../analytics";
 import { valueAll } from "../valuation";
 import { AI_ACTION_LABELS, type AiAction } from "./types";
 
@@ -46,113 +50,6 @@ function ymd(date: Date) {
   return format(date, "yyyy-MM-dd");
 }
 
-function resolvePeriod(action: AiAction, today: string) {
-  const date = parseISO(today);
-  switch (action) {
-    case "brief_daily":
-      return { from: today, to: today, label: `${today} 日报` };
-    case "brief_weekly": {
-      const from = ymd(subDays(date, 6));
-      return { from, to: today, label: `${from} 至 ${today} 周报` };
-    }
-    case "brief_monthly": {
-      const from = ymd(startOfMonth(date));
-      return { from, to: today, label: `${from} 至 ${today} 月报` };
-    }
-    case "checkup": {
-      const from = ymd(subDays(date, 89));
-      return { from, to: today, label: "近 90 日资产体检" };
-    }
-    default: {
-      const from = ymd(subDays(date, 29));
-      return { from, to: today, label: "近 30 日只读问答上下文" };
-    }
-  }
-}
-
-function listRecentSnapshots(baseCurrency: string): PortfolioSnapshot[] {
-  return (
-    getDB()
-      .prepare(
-        `SELECT * FROM portfolio_snapshot
-         WHERE base_currency = ?
-         ORDER BY date DESC
-         LIMIT 400`
-      )
-      .all(baseCurrency) as PortfolioSnapshot[]
-  ).reverse();
-}
-
-function snapshotForBaseline(
-  snapshots: PortfolioSnapshot[],
-  fromDate: string
-) {
-  const candidates = snapshots.filter((snapshot) => snapshot.date < fromDate);
-  return candidates.at(-1) ?? null;
-}
-
-function buildEventSummary(events: ReturnType<typeof listPortfolioEvents>) {
-  const grouped = new Map<
-    string,
-    { type: PortfolioEventType; label: string; currency: string; count: number; grossAmount: number }
-  >();
-  for (const event of events) {
-    const key = `${event.type}:${event.currency}`;
-    const entry = grouped.get(key) ?? {
-      type: event.type,
-      label: EVENT_LABELS[event.type],
-      currency: event.currency,
-      count: 0,
-      grossAmount: 0
-    };
-    entry.count += 1;
-    entry.grossAmount += event.grossAmount ?? 0;
-    grouped.set(key, entry);
-  }
-  return Array.from(grouped.values()).map((entry) => ({
-    ...entry,
-    grossAmount: round(entry.grossAmount)
-  }));
-}
-
-function summarizeCashEvents(
-  events: ReturnType<typeof listPortfolioEvents>,
-  type: "cash_expense" | "cash_deposit",
-  baseCurrency: string
-) {
-  const grouped = new Map<string, { currency: string; count: number; amount: number }>();
-  for (const event of events) {
-    if (event.type !== type) continue;
-    const entry = grouped.get(event.currency) ?? {
-      currency: event.currency,
-      count: 0,
-      amount: 0
-    };
-    entry.count += 1;
-    entry.amount += Math.abs(event.grossAmount ?? 0);
-    grouped.set(event.currency, entry);
-  }
-  const byCurrency = Array.from(grouped.values()).map((entry) => ({
-    ...entry,
-    amount: round(entry.amount)
-  }));
-  const missingCurrencies: string[] = [];
-  let approximateBaseValue = 0;
-  for (const entry of grouped.values()) {
-    const converted = convert(entry.amount, entry.currency, baseCurrency);
-    if (converted == null) missingCurrencies.push(entry.currency);
-    else approximateBaseValue += converted;
-  }
-  return {
-    count: events.filter((event) => event.type === type).length,
-    byCurrency,
-    approximateBaseValue: missingCurrencies.length ? null : round(approximateBaseValue),
-    baseCurrency,
-    conversionUsesCurrentRates: true,
-    missingCurrencies
-  };
-}
-
 function buildHealthScore(params: {
   largestCategoryRatio: number;
   largestAssetRatio: number;
@@ -183,10 +80,11 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   const valuation = valueAll(baseCurrency);
   const today = todayCn();
-  const period = resolvePeriod(action, today);
+  const period = resolveAnalysisPeriod(action, today, question);
+  const periodSummary = summarizePortfolioPeriod(baseCurrency, period.from, period.to);
   const grossAssets = valuation.totalAssets;
-  const snapshots = listRecentSnapshots(baseCurrency);
-  const baseline = snapshotForBaseline(snapshots, period.from);
+  const snapshots = periodSummary.snapshots;
+  const baseline = periodSummary.start;
   const periodSnapshots = snapshots
     .filter((snapshot) => snapshot.date >= period.from && snapshot.date <= period.to)
     .map((snapshot) => ({
@@ -368,22 +266,14 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
   const events = listPortfolioEvents({
     fromDate: period.from,
     toDate: period.to,
-    limit: 500
+    limit: action === "chat" ? 30 : 60
   });
   const eventCoverage = getPortfolioEventCoverage();
   const last7From = ymd(subDays(parseISO(today), 6));
   const last30From = ymd(subDays(parseISO(today), 29));
-  const rollingEvents = listPortfolioEvents({
-    fromDate: last30From,
-    toDate: today,
-    limit: 1000
-  });
-  const last7Events = rollingEvents.filter(
-    (event) => event.occurredAt.slice(0, 10) >= last7From
-  );
-  const eventCoverageFirstDate = eventCoverage.firstOccurredAt?.slice(0, 10) ?? null;
+  const eventSummary = summarizePortfolioEvents(period.from, period.to);
   const coverageFor = (from: string) =>
-    eventCoverageFirstDate != null && eventCoverageFirstDate <= from;
+    eventCoverage.reliableFrom != null && eventCoverage.reliableFrom.slice(0, 10) < from;
 
   const valuationCoverage = getDB()
     .prepare(
@@ -408,51 +298,38 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
     last_date: string | null;
   };
 
-  const currentValuationDate = (
-    getDB()
-      .prepare(
-        `SELECT MAX(date) AS date FROM asset_valuation_daily
-         WHERE base_currency = ? AND date <= ?`
-      )
-      .get(baseCurrency, today) as { date: string | null }
-  ).date;
-  const baselineValuationDate = currentValuationDate
-    ? (
-        getDB()
-          .prepare(
-            `SELECT MAX(date) AS date FROM asset_valuation_daily
-             WHERE base_currency = ? AND date < ? AND date < ?`
-          )
-          .get(baseCurrency, currentValuationDate, period.from) as { date: string | null }
-      ).date
-    : null;
+  const currentValuationDate = periodSummary.end?.date ?? null;
+  const baselineValuationDate = periodSummary.start?.date ?? null;
   const fxImpact =
     baselineValuationDate && currentValuationDate && baselineValuationDate < currentValuationDate
       ? summarizeFxImpact(baseCurrency, baselineValuationDate, currentValuationDate)
       : null;
-  const last7Expenses = summarizeCashEvents(last7Events, "cash_expense", baseCurrency);
-  const last7Deposits = summarizeCashEvents(last7Events, "cash_deposit", baseCurrency);
-  const last30Expenses = summarizeCashEvents(
-    rollingEvents,
-    "cash_expense",
-    baseCurrency
-  );
-  const last30Deposits = summarizeCashEvents(
-    rollingEvents,
-    "cash_deposit",
-    baseCurrency
-  );
+  const last7Expenses = summarizeCashFlow(last7From, today, "cash_expense", baseCurrency);
+  const last7Deposits = summarizeCashFlow(last7From, today, "cash_deposit", baseCurrency);
+  const last30Expenses = summarizeCashFlow(last30From, today, "cash_expense", baseCurrency);
+  const last30Deposits = summarizeCashFlow(last30From, today, "cash_deposit", baseCurrency);
+  const fxHasComparable = fxImpact?.byCurrency.some(item => item.comparable) ?? false;
+  const fxComplete = fxHasComparable && periodSummary.status === "complete" &&
+    fxImpact!.hasPreviousValuation && fxImpact!.hasCurrentValuation &&
+    fxImpact!.byCurrency.every(item => item.comparable) && Math.abs(fxImpact!.unclassifiedBaseValueChange) < 0.005;
+  const fxStatus = fxComplete ? "complete" : fxHasComparable ? "partial" : "unavailable";
   const fxImpactFact = fxImpact
     ? {
-        available: true,
+        available: fxComplete,
+        status: fxStatus,
         from: fxImpact.from,
         to: fxImpact.to,
-        totalFxImpact: round(fxImpact.totalFxImpact),
+        totalFxImpact: fxComplete ? round(fxImpact.totalFxImpact) : null,
+        knownFxImpact: fxHasComparable ? round(fxImpact.totalFxImpact) : null,
+        unclassifiedChange: round(fxImpact.unclassifiedBaseValueChange),
         baseCurrency,
-        statement: `${fxImpact.from} 至 ${fxImpact.to} 的汇率影响为 ${round(fxImpact.totalFxImpact)} ${baseCurrency}。`
+        statement: fxComplete
+          ? `${fxImpact.from} 至 ${fxImpact.to} 的两端估值分解中，汇率影响为 ${round(fxImpact.totalFxImpact)} ${baseCurrency}。`
+          : `${fxImpact.from} 至 ${fxImpact.to} 的汇率归因覆盖不完整，不能给出完整汇率影响；已识别部分为 ${fxHasComparable ? round(fxImpact.totalFxImpact) : "不可计算"}，未归因变化为 ${round(fxImpact.unclassifiedBaseValueChange)} ${baseCurrency}。`
       }
     : {
         available: false,
+        status: "unavailable",
         requestedFrom: period.from,
         requestedTo: period.to,
         statement: `无法计算 ${period.from} 至 ${period.to} 的汇率影响：逐资产估值仅覆盖 ${valuationCoverage.first_date ?? "无记录"} 至 ${valuationCoverage.last_date ?? "无记录"}，汇率历史仅覆盖 ${fxRateCoverage.first_date ?? "无记录"} 至 ${fxRateCoverage.last_date ?? "无记录"}；汇率归因至少需要周期开始前与结束时两端可比的逐资产估值。`
@@ -466,8 +343,8 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
     approximateBaseValue: last7Expenses.approximateBaseValue,
     baseCurrency,
     statement: coverageFor(last7From)
-      ? `${last7From} 至 ${today} 的消费事件覆盖完整，共记录 ${last7Expenses.count} 笔。`
-      : `${last7From} 至 ${today} 的事件覆盖不完整；事件层首条记录为 ${eventCoverage.firstOccurredAt ?? "无记录"}，只能报告已记录的 ${last7Expenses.count} 笔消费，不能把未记录部分当作 0。`
+      ? `${last7From} 至 ${today} 已处于系统可靠记录期，共记录 ${last7Expenses.count} 笔；仍不能证明现实消费均已录入。`
+      : `${last7From} 至 ${today} 的事件覆盖不完整；系统可靠记录起点为 ${eventCoverage.reliableFrom ?? "未知"}，只能报告已记录的 ${last7Expenses.count} 笔消费，不能把未记录部分当作 0。`
   };
 
   const categoryEntries = allocation.filter((item) => item.code !== "liability");
@@ -524,10 +401,14 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
     byCategory: valuation.byCategory,
     baseCurrency
   });
-  const securityFloatingProfitBase = securities.reduce((sum, asset) => {
-    if (asset.profit_native == null) return sum;
-    return sum + (convert(asset.profit_native, asset.currency, baseCurrency) ?? 0);
-  }, 0);
+  const profitCandidates = securities.filter(asset => (asset.quantity ?? 0) > 0);
+  const knownProfits = profitCandidates.flatMap(asset => {
+    const profit = asset.profit_native == null ? null : convert(asset.profit_native, asset.currency, baseCurrency);
+    return profit == null ? [] : [profit];
+  });
+  const knownProfitSubtotal = knownProfits.reduce((sum, value) => sum + value, 0);
+  const floatingProfitComplete = knownProfits.length === profitCandidates.length;
+  const securityFloatingProfitBase = floatingProfitComplete ? knownProfitSubtotal : null;
 
   return {
     meta: {
@@ -541,18 +422,20 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
       historySentToModel: false
     },
     portfolio: {
+      valuationScope: "current",
+      status: valuation.missingRates.length ? "partial" : "complete",
       netWorth: round(valuation.netWorth),
       totalAssets: round(valuation.totalAssets),
       totalLiabilities: round(valuation.totalLiabilities),
       assetCount: valuation.items.length,
       baselineDate: baseline?.date ?? null,
-      baselineNetWorth: round(baseline?.total_value),
+      baselineNetWorth: round(baseline?.netWorth),
       changeFromBaseline: round(
-        baseline ? valuation.netWorth - baseline.total_value : null
+        periodSummary.netWorthChange
       ),
       changeRateFromBaseline: round(
-        baseline?.total_value
-          ? (valuation.netWorth - baseline.total_value) / Math.abs(baseline.total_value)
+        baseline?.netWorth && periodSummary.netWorthChange != null
+          ? periodSummary.netWorthChange / Math.abs(baseline.netWorth)
           : null,
         4
       )
@@ -574,15 +457,22 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
       deterministicFindings: suggestions
     },
     marketSession: {
-      pnlBase: round(todayPnl.totalBase),
+      pnlBase: round(todayPnl.availableTotalBase),
+      status: todayPnl.status,
+      missingRates: todayPnl.missingRates,
+      closedPositions: todayPnl.closedPositions,
+      basis: "日初持仓的行情会话日影响，含当日清仓；不是按实际成交计算的交易收益。",
       cnHkDate: todayPnl.sessionDates.cnHk,
       usDate: todayPnl.sessionDates.us,
       coveredSecurityCount: todayPnl.perAsset.size,
-      totalSecurityCount: securities.length,
+      totalSecurityCount: todayPnl.eligibleCount,
+      currentSecurityCount: securities.length,
       marketValueBase: round(
         securities.reduce((sum, asset) => sum + asset.base_value, 0)
       ),
       floatingProfitBase: round(securityFloatingProfitBase),
+      floatingProfitStatus: floatingProfitComplete ? "complete" : knownProfits.length ? "partial" : "unavailable",
+      knownFloatingProfitSubtotal: knownProfits.length ? round(knownProfitSubtotal) : null,
       sessionMovers: sessionMovers.map((item) => ({
         name: item.name,
         symbol: item.symbol,
@@ -593,7 +483,9 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
     },
     events: {
       coverage: eventCoverage,
-      summary: buildEventSummary(events),
+      summary: eventSummary.map(row => ({ ...row, label: EVENT_LABELS[row.type], grossAmount: round(row.grossAmount) })),
+      returnedDetails: events.length,
+      totalCount: eventSummary.reduce((sum, row) => sum + row.count, 0),
       recent: events.slice(0, action === "chat" ? 30 : 60).map((event) => ({
         type: event.type,
         label: EVENT_LABELS[event.type],
@@ -601,6 +493,7 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
         grossAmount: round(event.grossAmount),
         reason: event.reason,
         occurredAt: event.occurredAt,
+        cashLinked: typeof event.metadata?.cash_linked === "boolean" ? event.metadata.cash_linked : null,
         legs: event.legs.map((leg) => ({
           assetName: leg.assetName,
           role: leg.role,
@@ -610,7 +503,15 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
         }))
       }))
     },
+    profitBasis: {
+      basis: "用户录入的券商均价",
+      statement: "浮盈按用户录入的券商均价计算；该均价可能已调整分红，不能再把累计分红直接加到浮盈。费用、税费是否已包含未知；未关联现金的交易不能认定为外部入金或完整资金流。当前不提供独立真实投资收益。"
+    },
     answerFacts: {
+      requestedPeriod: { ...periodSummary, snapshots: undefined },
+      requestedPeriodExpenses: summarizeCashFlow(period.from, period.to, "cash_expense", baseCurrency),
+      requestedPeriodDeposits: summarizeCashFlow(period.from, period.to, "cash_deposit", baseCurrency),
+      requestedPeriodRecordingCovered: coverageFor(period.from),
       requestedPeriodFxImpact: fxImpactFact,
       last7DaysExpenses: last7ExpenseFact
     },
@@ -651,9 +552,9 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
         firstDate: fxRateCoverage.first_date,
         lastDate: fxRateCoverage.last_date
       },
-      requestedPeriodFxImpactAvailable: fxImpact != null,
+      requestedPeriodFxImpactAvailable: fxComplete,
       caveat:
-        "事件层和逐资产估值只从功能上线后完整记录；更早历史不得反推。行情与汇率可能使用缓存。"
+        "旧事件覆盖无法证明完整，系统记录完整也不代表现实操作均已录入；更早逐资产历史不得反推。行情与汇率可能使用缓存。"
     },
     currentFxRates: listRates().map((rate) => ({
       base: rate.base,
@@ -674,7 +575,7 @@ const TASK_INSTRUCTIONS: Record<AiAction, string> = {
   checkup:
     "完成资产体检，控制在 700 字内。按“总体评价、核心风险、流动性、集中度与币种、可执行建议、数据缺口”组织。使用程序给出的 health.score，不自行修改分数。风险按高、中、低标注，建议具体但不要给确定性买卖指令。",
   brief_daily:
-    "生成 550 字以内的资产日报。按“今日概览、资金流与操作、市场表现、风险提醒、明日关注”组织。历史不足时直接写明，不把累计变化或 floatingProfit 冒充单日变化；证券当日表现只使用 sessionPnlBase 和 sessionMovers，不要列累计浮盈作为今日贡献。",
+    "生成 550 字以内的资产日报。按“今日概览、资金流与操作、市场表现、风险提醒、明日关注”组织。历史不足时直接写明，不把累计变化或 floatingProfit 冒充单日变化；证券当日表现只使用 sessionPnlBase、sessionMovers 和 closedPositions，不要列累计浮盈作为今日贡献。",
   brief_weekly:
     "生成 700 字以内的资产周报。按“本周摘要、净值变化、资金流与交易、配置变化、汇率影响、风险与下周关注”组织。只使用覆盖期内数据。",
   brief_monthly:
@@ -695,6 +596,8 @@ export function buildAiMessages(action: AiAction, message?: string) {
     "资产类别数量与排序只按 allocation 的完整列表和 ratioOfGrossAssets 数值判断；最大类别以 health.metrics.largestCategory 为准。",
     "assets 可能是按问题筛选的明细子集；总额、占比和类别结论必须使用 portfolio、allocation、currencyExposure 等完整聚合字段。",
     "若 events.coverage.count 为 0，只能说统一事件层暂无覆盖记录，不能断言期间没有操作。",
+    "历史区间问题只用 answerFacts.requestedPeriod 的实际起止日期和金额；portfolio、assets 和 allocation 是当前状态，不能当作历史期末。净资产变化不是投资收益。",
+    "marketSession.status 不完整时说明覆盖范围；pnlBase=null 表示不可用，绝不能说成零收益。profitBasis 定义了券商成本口径和分红重复计入风险。",
     "rollingWindows 是程序预先计算的滚动现金流汇总；eventCoverageComplete 为 false 时不得把 count=0 或金额 0 解释为没有消费或入金。",
     "answerFacts 是程序生成的权威结论；回答相关问题时直接使用其中的 statement、日期和金额，不得合并、改写或猜测不同数据源的覆盖日期。",
     "被问到历史分析为何不可用时，必须引用 dataQuality 中事件、逐资产估值和汇率历史的实际起止日期，说明“表已存在”不等于已有足够历史观测。",
@@ -706,7 +609,7 @@ export function buildAiMessages(action: AiAction, message?: string) {
     action === "chat" ? message?.trim() || "请概括我当前的资产状况。" : task;
   const user = [
     "<portfolio_data>",
-    JSON.stringify(context, (_key, value) => (value == null ? undefined : value)),
+    JSON.stringify(context),
     "</portfolio_data>",
     "",
     `<task_type>${AI_ACTION_LABELS[action]}</task_type>`,

@@ -8,6 +8,7 @@ import {
 import { convert, getRate } from "./fx";
 import { computeAssetValue, valueAll } from "./valuation";
 import { nowCn, todayCn } from "./time";
+import { parseStockSymbol } from "./stocks";
 
 /**
  * 从今天第一条「份额变更」记录反推「今日第一次改仓前」的持仓股数。
@@ -109,6 +110,8 @@ export function logAssetChange(params: {
   if (action === "update" && before && after) {
     fieldChanges = {};
     const keys: (keyof AssetRow)[] = [
+      "account_id",
+      "symbol",
       "name",
       "currency",
       "quantity",
@@ -129,6 +132,9 @@ export function logAssetChange(params: {
     if (Object.keys(fieldChanges).length === 0) return;
   }
 
+  const category = db.prepare(`SELECT c.code FROM account acc
+    JOIN category c ON c.id = acc.category_id WHERE acc.id = ?`)
+    .get(target.account_id) as { code: string } | undefined;
   const nativeValue = computeAssetValue(target);
   const baseValueCny = convert(nativeValue, target.currency, "CNY");
   // B4: 负债大类的 base_value_cny 取负展示，避免"最近变动"看起来像收益增加
@@ -155,8 +161,8 @@ export function logAssetChange(params: {
     target.account_id,
     target.name,
     action,
-    fieldChanges ? JSON.stringify(fieldChanges) : null,
-    JSON.stringify(target),
+    fieldChanges ? JSON.stringify(fieldChanges) : extraChanges ? JSON.stringify(extraChanges) : null,
+    JSON.stringify({ ...target, category_code: category?.code ?? null }),
     valueCny,
     nowCn()
   );
@@ -227,7 +233,8 @@ export function recordSnapshot(baseCurrency: string): PortfolioSnapshot {
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(date, base_currency) DO UPDATE SET
        total_value = excluded.total_value,
-       breakdown = excluded.breakdown`
+       breakdown = excluded.breakdown,
+       created_at = excluded.created_at`
   );
   const clearDaily = db.prepare(
     "DELETE FROM asset_valuation_daily WHERE date = ? AND base_currency = ?"
@@ -451,16 +458,20 @@ export function summarizeFxImpact(
   };
 }
 
-export function listSnapshots(baseCurrency: string, days = 365): PortfolioSnapshot[] {
+export function listSnapshots(baseCurrency: string, limit = 365, range: { from?: string; to?: string } = {}): PortfolioSnapshot[] {
   const db = getDB();
-  return db
+  const where = ["base_currency = ?"];
+  const args: Array<string | number> = [baseCurrency];
+  if (range.from) { where.push("date >= ?"); args.push(range.from); }
+  if (range.to) { where.push("date <= ?"); args.push(range.to); }
+  return (db
     .prepare(
       `SELECT * FROM portfolio_snapshot
-       WHERE base_currency = ?
-       ORDER BY date ASC
+       WHERE ${where.join(" AND ")}
+       ORDER BY date DESC
        LIMIT ?`
     )
-    .all(baseCurrency, days) as PortfolioSnapshot[];
+    .all(...args, Math.max(1, Math.trunc(limit))) as PortfolioSnapshot[]).reverse();
 }
 
 /** 从组合快照里提取证券大类的历史总值曲线 */
@@ -468,19 +479,14 @@ export function listSecuritiesBreakdown(
   baseCurrency: string,
   days = 365
 ): Array<{ date: string; value: number }> {
-  const db = getDB();
-  return (
-    db
-      .prepare(
-        `SELECT date,
-                COALESCE(CAST(json_extract(breakdown, '$.securities') AS REAL), 0) AS value
-         FROM portfolio_snapshot
-         WHERE base_currency = ?
-         ORDER BY date ASC
-         LIMIT ?`
-      )
-      .all(baseCurrency, days) as Array<{ date: string; value: number }>
-  ).filter((r) => r.value > 0);
+  return listSnapshots(baseCurrency, days).flatMap(snapshot => {
+    try {
+      const breakdown = JSON.parse(snapshot.breakdown ?? "null");
+      if (!breakdown || typeof breakdown !== "object") return [];
+      const value = Number(breakdown.securities ?? 0);
+      return Number.isFinite(value) ? [{ date: snapshot.date, value }] : [];
+    } catch { return []; }
+  });
 }
 
 /**
@@ -503,12 +509,40 @@ export function computeTodayStockPnL(
   baseCurrency: string
 ): {
   totalBase: number;
+  availableTotalBase: number | null;
+  status: "complete" | "partial" | "unavailable";
+  missingRates: string[];
+  eligibleCount: number;
+  closedPositionCount: number;
+  closedPositions: Array<{ id: number; name: string; symbol: string | null; currency: string; quoteDate: string; pnlBase: number }>;
   perAsset: Map<number, TodayPnLEntry>;
   sessionDates: { cnHk: string; us: string | null };
 } {
   const perAsset = new Map<number, TodayPnLEntry>();
   let totalBase = 0;
   const today = todayCn();
+  // 清仓会删除当前资产，必须从当天删除记录保留的状态取回计算候选。
+  // 旧记录若没有分类依据，不猜测；不合并已复用 ID 的旧历史。
+  const existingIds = new Set(items.map(item => item.id));
+  const removed = getDB().prepare(`SELECT asset_id, snapshot FROM asset_change
+    WHERE action = 'delete' AND substr(created_at, 1, 10) = ?
+    ORDER BY id DESC`).all(today) as Array<{ asset_id: number; snapshot: string | null }>;
+  const closed = new Map<number, AssetRow>();
+  for (const row of removed) {
+    if (existingIds.has(row.asset_id) || closed.has(row.asset_id) || !row.snapshot) continue;
+    try {
+      const asset = JSON.parse(row.snapshot) as AssetRow & { category_code?: string };
+      if (asset.category_code !== "securities" || asset.id !== row.asset_id) continue;
+      closed.set(asset.id, asset);
+    } catch { /* 无法验证的历史不参与 */ }
+  }
+  items = [...items, ...Array.from(closed.values()).map(asset => ({
+    id: asset.id, currency: asset.currency, quantity: asset.quantity ?? 0,
+    currentPrice: asset.current_price, changePercent: asset.change_percent,
+    changeQuoteDate: asset.change_quote_date, market: parseStockSymbol(asset.symbol)?.market ?? null
+  }))];
+  const missingRates = new Set<string>();
+  let eligibleCount = 0;
   const latestUsQuoteDate =
     items
       .filter(
@@ -534,6 +568,7 @@ export function computeTodayStockPnL(
   for (const item of items) {
     const qtyDayStart = qtyDayStartById.get(item.id) ?? (item.quantity ?? 0);
     if (qtyDayStart <= 0) continue;
+    eligibleCount++;
 
     const expectedQuoteDate = item.market === "us" ? latestUsQuoteDate : today;
     if (!item.changeQuoteDate || item.changeQuoteDate !== expectedQuoteDate) {
@@ -556,7 +591,11 @@ export function computeTodayStockPnL(
     const todayChangePct = item.changePercent;
 
     const todayPnLNative = todayPriceChange * qtyDayStart;
-    const todayPnLBase = convert(todayPnLNative, item.currency, baseCurrency) ?? 0;
+    const todayPnLBase = convert(todayPnLNative, item.currency, baseCurrency);
+    if (todayPnLBase == null) {
+      missingRates.add(`${item.currency}->${baseCurrency}`);
+      continue;
+    }
     perAsset.set(item.id, {
       assetId: item.id,
       quoteDate: item.changeQuoteDate,
@@ -570,6 +609,16 @@ export function computeTodayStockPnL(
 
   return {
     totalBase,
+    availableTotalBase: perAsset.size > 0 ? totalBase : null,
+    status: perAsset.size === 0 ? "unavailable" : perAsset.size < eligibleCount ? "partial" : "complete",
+    missingRates: [...missingRates],
+    eligibleCount,
+    closedPositionCount: closed.size,
+    closedPositions: Array.from(closed.values()).flatMap(asset => {
+      const pnl = perAsset.get(asset.id);
+      return pnl ? [{ id: asset.id, name: asset.name, symbol: asset.symbol, currency: asset.currency,
+        quoteDate: pnl.quoteDate, pnlBase: pnl.todayPnLBase }] : [];
+    }),
     perAsset,
     sessionDates: { cnHk: today, us: latestUsQuoteDate }
   };

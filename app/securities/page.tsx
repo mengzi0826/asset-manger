@@ -104,7 +104,7 @@ export default async function SecuritiesPage() {
   const totalValue = valuation.byCategory.securities ?? 0;
   const pnlUp = secUnrealized >= 0;
   const secHoldingsWithQty = secItems.filter((a) => (a.quantity ?? 0) > 0);
-  const hasSecuritiesForTodayKpi = secHoldingsWithQty.length > 0;
+  const hasSecuritiesForTodayKpi = secHoldingsWithQty.length > 0 || todayPnL.closedPositionCount > 0;
   const todayPnLValue = todayPnL.totalBase;
   const todayUp = todayPnLValue > 0;
   const contributingCount = todayPnL.perAsset.size;
@@ -171,6 +171,12 @@ export default async function SecuritiesPage() {
               <div className="mt-1 text-[13px] text-ink-500">
                 在「资产」页为证券类账户添加资产，或直接点击上方新增按钮
               </div>
+              {todayPnL.closedPositionCount > 0 && (
+                <div className="mt-3 text-[13px] text-ink-600">
+                  今日已移除持仓的行情影响：{hasTodayQuotes ? formatMoney(todayPnLValue, baseCurrency) : "—"}
+                  {todayPnL.status === "partial" ? "（部分覆盖）" : ""}
+                </div>
+              )}
             </div>
             <Link href="/assets/new?cat=securities" className="btn-outline mt-2">
               <Plus className="h-3.5 w-3.5" /> 新增持仓
@@ -197,7 +203,7 @@ export default async function SecuritiesPage() {
                 !hasSecuritiesForTodayKpi
                   ? undefined
                   : hasTodayQuotes
-                    ? `${contributingCount} 只`
+                    ? `${contributingCount} 只${todayPnL.closedPositions.length ? " · 含今日已移除" : ""}${todayPnL.status === "partial" ? " · 部分覆盖" : ""}`
                     : weekend
                       ? "休市或无可用会话日"
                       : "无可用会话日"
@@ -231,6 +237,10 @@ export default async function SecuritiesPage() {
             <TrendCard data={panelData} currency={baseCurrency} />
             <PnLCard data={panelData} currency={baseCurrency} />
           </div>
+          <p className="text-[11px] text-ink-400">
+            浮盈以手填券商均价为准；分红可能已反映在均价中，请勿重复加总。费用是否已包含取决于录入成本。
+            盈亏曲线按当前持仓回算，不含已清仓持仓，不代表真实历史投资收益。
+          </p>
 
           {/* 下排：持仓明细整行铺开 */}
           <section className="card">
@@ -319,14 +329,14 @@ function isoMinusOneDay(iso: string): string {
 /**
  * 重建「浮动盈亏」逐日序列。
  *
- * 关键约束：曲线最后一段（昨日 → 今日）的差值必须严格等于 KPI 的「今日盈亏」。
+ * 此图按当前持仓回算；KPI 另外包含当日已移除持仓，因此两者差值不一定相等。
  *
  * 算法：
  *  1. 收集所有「严格早于今天」的 priceHistory 日期，加上昨日、今日。
  *  2. 对每只持仓：
  *     - 今天的价格 = currentPrice（与持仓明细一致）。
  *     - 昨天的价格 = currentPrice − todayPriceChange（即行情昨收）。
- *       todayPriceChange 与 KPI 同出 computeTodayStockPnL，所以严格保证差值匹配 KPI。
+ *       todayPriceChange 与 KPI 同出 computeTodayStockPnL。
  *     - 昨天以前：若无 priceHistory，直接沿用「昨收」做平线（贡献恒定的实际盈亏）；
  *       若有 priceHistory，则按记录逐日推进价格。
  *  3. 折算到基准货币累加。

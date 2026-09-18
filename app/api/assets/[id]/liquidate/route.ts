@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getDB, type AssetRow, getSetting } from "@/lib/db";
-import { logAssetChange, ensureTodaySnapshot } from "@/lib/history";
+import { getDB, type AssetRow } from "@/lib/db";
+import { logAssetChange } from "@/lib/history";
 import { recordPortfolioEvent, type PortfolioEventLegInput } from "@/lib/portfolioEvents";
+import { portfolioTransaction } from "@/lib/portfolioMutations";
 import { nowCn } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -72,7 +73,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     }
 
     const now = nowCn();
-    const run = db.transaction(() => {
+    const run = portfolioTransaction(() => {
       const securityBefore = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
       const eventLegs: PortfolioEventLegInput[] = [
         {
@@ -111,13 +112,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         currency: securityBefore.currency,
         grossAmount: proceeds,
         occurredAt: now,
-        metadata: { cash_linked: Boolean(cash) },
+        metadata: {
+          cash_linked: Boolean(cash),
+          cost_basis: "user_entered_broker_cost",
+          unit_cost_before: securityBefore.unit_cost,
+          quantity_before: securityBefore.quantity,
+          fees_and_taxes: "unknown"
+        },
         legs: eventLegs
       });
     });
 
     run();
-    ensureTodaySnapshot(getSetting("base_currency") ?? "CNY");
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? "Invalid" }, { status: 400 });

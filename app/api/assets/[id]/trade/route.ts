@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getDB, type AssetRow, getSetting } from "@/lib/db";
-import { logAssetChange, ensureTodaySnapshot } from "@/lib/history";
+import { getDB, type AssetRow } from "@/lib/db";
+import { logAssetChange } from "@/lib/history";
 import { recordPortfolioEvent, type PortfolioEventLegInput } from "@/lib/portfolioEvents";
+import { portfolioTransaction } from "@/lib/portfolioMutations";
 import { nowCn } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -101,7 +102,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const nextQty =
       parsed.side === "buy" ? curQty + qtyDelta : curQty - qtyDelta;
 
-    const run = db.transaction(() => {
+    const run = portfolioTransaction(() => {
       const securityBefore = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
       db.prepare(
         `UPDATE asset SET quantity = @quantity, unit_cost = @unit_cost, updated_at = @updated_at WHERE id = @id`
@@ -147,7 +148,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         currency: securityAfter.currency,
         grossAmount: tradeValue,
         occurredAt: now,
-        metadata: { cash_linked: Boolean(cash) },
+        metadata: {
+          cash_linked: Boolean(cash),
+          cost_basis: "user_entered_broker_cost",
+          unit_cost_before: securityBefore.unit_cost,
+          quantity_before: securityBefore.quantity,
+          fees_and_taxes: "unknown"
+        },
         legs: eventLegs
       });
 
@@ -155,7 +162,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     });
 
     const asset = run();
-    ensureTodaySnapshot(getSetting("base_currency") ?? "CNY");
     return NextResponse.json({ asset });
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? "Invalid" }, { status: 400 });

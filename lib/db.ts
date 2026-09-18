@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
+import { syncEntitySequences } from "./identity";
+import { nowCn } from "./time";
 
 // 运行时保险：确保进程时区为中国标准时间。next.config.mjs 已经设置过一次，
 // 但脚本/工具单独加载 lib/db.ts 时仍可生效。
@@ -33,7 +35,9 @@ function initDB(): Database.Database {
 }
 
 /** 对老库做幂等的字段补齐，避免删库重建 */
+const migratedConnections = new WeakSet<Database.Database>();
 function migrateSchema(db: Database.Database) {
+  if (migratedConnections.has(db)) return;
   // 汇率与逐资产估值历史：不从组合总额反推旧日明细，只精确回填当前 fx_rate 的已有观测点。
   db.exec(`
     CREATE TABLE IF NOT EXISTS fx_rate_history (
@@ -156,6 +160,14 @@ function migrateSchema(db: Database.Database) {
   if (!names.has("change_quote_date")) {
     db.exec("ALTER TABLE asset ADD COLUMN change_quote_date TEXT");
   }
+  syncEntitySequences(db);
+  db.exec(`CREATE TABLE IF NOT EXISTS history_integrity (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    reliable_from TEXT NOT NULL,
+    last_import_at TEXT
+  )`);
+  db.prepare("INSERT OR IGNORE INTO history_integrity (id, reliable_from) VALUES (1, ?)").run(nowCn());
+  migratedConnections.add(db);
 }
 
 function seedCategories(db: Database.Database) {

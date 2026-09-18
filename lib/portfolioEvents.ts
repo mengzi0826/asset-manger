@@ -1,5 +1,6 @@
 import { getDB } from "./db";
 import { nowCn } from "./time";
+import { getHistoricalRateAtOrBefore } from "./fx";
 
 export type PortfolioEventType =
   | "asset_created"
@@ -93,7 +94,7 @@ export function recordPortfolioEvent(input: PortfolioEventInput): number {
       input.source ?? "user",
       encodeMetadata(input.metadata),
       occurredAt,
-      occurredAt
+      nowCn()
     );
   const eventId = Number(result.lastInsertRowid);
   const insertLeg = db.prepare(
@@ -126,7 +127,8 @@ export function listPortfolioEvents(options: {
   fromDate?: string;
   toDate?: string;
   types?: PortfolioEventType[];
-  limit?: number;
+  /** null 仅供内部归因使用：统计不得被页面明细条数截断。 */
+  limit?: number | null;
 } = {}): PortfolioEvent[] {
   const db = getDB();
   const where: string[] = [];
@@ -143,15 +145,18 @@ export function listPortfolioEvents(options: {
     where.push(`event_type IN (${options.types.map(() => "?").join(",")})`);
     args.push(...options.types);
   }
-  const limit = Math.min(Math.max(Math.trunc(options.limit ?? 500), 1), 5000);
+  const limit = options.limit === null ? null : Math.min(Math.max(Math.trunc(options.limit ?? 500), 1), 5000);
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const limitSql = limit == null ? "" : "LIMIT ?";
+  const queryArgs = limit == null ? args : [...args, limit];
   const rows = db
     .prepare(
       `SELECT * FROM portfolio_event
-       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+       ${whereSql}
        ORDER BY occurred_at DESC, id DESC
-       LIMIT ?`
+       ${limitSql}`
     )
-    .all(...args, limit) as Array<{
+    .all(...queryArgs) as Array<{
       id: number;
       event_type: PortfolioEventType;
       currency: string;
@@ -164,10 +169,11 @@ export function listPortfolioEvents(options: {
     }>;
   if (rows.length === 0) return [];
 
-  const ids = rows.map((row) => row.id);
   const legs = db
-    .prepare(`SELECT * FROM portfolio_event_leg WHERE event_id IN (${ids.map(() => "?").join(",")}) ORDER BY id`)
-    .all(...ids) as Array<{
+    .prepare(`SELECT * FROM portfolio_event_leg WHERE event_id IN (
+      SELECT id FROM portfolio_event ${whereSql} ORDER BY occurred_at DESC, id DESC ${limitSql}
+    ) ORDER BY id`)
+    .all(...queryArgs) as Array<{
       id: number;
       event_id: number;
       asset_id: number | null;
@@ -221,6 +227,9 @@ export function getPortfolioEventCoverage(): {
   count: number;
   firstOccurredAt: string | null;
   lastOccurredAt: string | null;
+  reliableFrom: string | null;
+  lastImportAt: string | null;
+  userCompleteness: "unverified";
 } {
   const row = getDB()
     .prepare(
@@ -230,9 +239,54 @@ export function getPortfolioEventCoverage(): {
        FROM portfolio_event`
     )
     .get() as { count: number; first_occurred_at: string | null; last_occurred_at: string | null };
+  const integrity = getDB().prepare("SELECT reliable_from, last_import_at FROM history_integrity WHERE id = 1")
+    .get() as { reliable_from: string; last_import_at: string | null } | undefined;
   return {
     count: row.count,
     firstOccurredAt: row.first_occurred_at,
-    lastOccurredAt: row.last_occurred_at
+    lastOccurredAt: row.last_occurred_at,
+    reliableFrom: integrity?.reliable_from ?? null,
+    lastImportAt: integrity?.last_import_at ?? null,
+    userCompleteness: "unverified"
+  };
+}
+
+/** 汇总整个区间，不受事件明细分页限制。未知金额保持 null。 */
+export function summarizePortfolioEvents(from: string, to: string) {
+  return getDB().prepare(`SELECT event_type AS type, currency, COUNT(*) AS count,
+    CASE WHEN COUNT(gross_amount) = COUNT(*) THEN SUM(gross_amount) ELSE NULL END AS grossAmount
+    FROM portfolio_event WHERE substr(occurred_at, 1, 10) BETWEEN ? AND ?
+    GROUP BY event_type, currency ORDER BY event_type, currency`).all(from, to) as Array<{
+      type: PortfolioEventType; currency: string; count: number; grossAmount: number | null;
+    }>;
+}
+
+/** 按业务发生时点折算；缺历史汇率时保留原币金额，不用今天汇率补齐。 */
+export function summarizeCashFlow(from: string, to: string, type: "cash_expense" | "cash_deposit", baseCurrency: string) {
+  const rows = getDB().prepare(`SELECT currency, occurred_at AS at, COUNT(*) AS count,
+    SUM(ABS(gross_amount)) AS amount, COUNT(gross_amount) AS knownCount
+    FROM portfolio_event WHERE event_type = ? AND substr(occurred_at, 1, 10) BETWEEN ? AND ?
+    GROUP BY currency, occurred_at`).all(type, from, to) as Array<{
+      currency: string; at: string; count: number; knownCount: number; amount: number | null;
+    }>;
+  const grouped = new Map<string, { currency: string; count: number; amount: number | null }>();
+  const missingCurrencies = new Set<string>();
+  let total = 0;
+  for (const row of rows) {
+    const entry = grouped.get(row.currency) ?? { currency: row.currency, count: 0, amount: 0 };
+    entry.count += row.count;
+    entry.amount = entry.amount == null || row.knownCount !== row.count ? null : entry.amount + (row.amount ?? 0);
+    grouped.set(row.currency, entry);
+    const rate = getHistoricalRateAtOrBefore(row.currency, baseCurrency, row.at);
+    if (rate == null || row.knownCount !== row.count) missingCurrencies.add(row.currency);
+    else total += (row.amount ?? 0) * rate;
+  }
+  return {
+    count: rows.reduce((sum, row) => sum + row.count, 0),
+    byCurrency: [...grouped.values()],
+    approximateBaseValue: missingCurrencies.size ? null : Math.round(total * 100) / 100,
+    baseCurrency, conversionUsesCurrentRates: false,
+    conversionBasis: "at_or_before_event_time",
+    missingCurrencies: [...missingCurrencies]
   };
 }

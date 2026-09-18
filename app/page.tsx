@@ -3,8 +3,6 @@ import {
   Activity,
   AlertCircle,
   AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
   CalendarClock,
   CheckCircle2,
   ExternalLink,
@@ -31,6 +29,8 @@ import {
 import { buildSuggestions } from "@/lib/advisor";
 import { AllocationChart } from "@/components/charts/AllocationChart";
 import { HistoryChart } from "@/components/charts/HistoryChart";
+import { NetWorthDelta } from "./_components/NetWorthDelta";
+import { buildNetWorthHistory } from "@/lib/netWorthHistory";
 import { BaseCurrencyPicker } from "./_components/BaseCurrencyPicker";
 import { formatDate, formatMoney, formatPercent, formatCnDateTime } from "@/lib/utils";
 import { getJuheFxAppKey, getJuheStockAppKey } from "@/lib/juheKeys";
@@ -47,6 +47,8 @@ export default async function DashboardPage() {
   const valuation = valueAll(baseCurrency);
   ensureTodaySnapshot(baseCurrency);
   const snapshots = listSnapshots(baseCurrency, 365);
+  const historyPoints = buildNetWorthHistory(snapshots, { baseCurrency, valuation });
+  const latestChange = historyPoints.at(-1)!.change;
   const recentChanges = listChanges(8);
   const suggestions = buildSuggestions({
     items: valuation.items,
@@ -59,9 +61,6 @@ export default async function DashboardPage() {
   const totalAssets = valuation.totalAssets;
   const totalLiabilities = valuation.totalLiabilities;
   const hasLiabilities = totalLiabilities > 0;
-  const prevSnap = snapshots.length >= 2 ? snapshots[snapshots.length - 2] : null;
-  const delta = prevSnap ? totalLatest - prevSnap.total_value : 0;
-  const deltaPct = prevSnap && prevSnap.total_value ? delta / prevSnap.total_value : 0;
 
   const firstSnap = snapshots[0];
   const totalSinceStart = firstSnap ? totalLatest - firstSnap.total_value : 0;
@@ -73,7 +72,6 @@ export default async function DashboardPage() {
   const secForTodayKpi = valuation.items.filter(
     (a) => a.category_code === "securities" && (a.quantity ?? 0) > 0
   );
-  const hasSecuritiesForKpi = secForTodayKpi.length > 0;
   const stockMarketByAssetId = new Map(
     secForTodayKpi.map(
       (asset) => [asset.id, parseStockSymbol(asset.symbol)?.market ?? null] as const
@@ -94,6 +92,7 @@ export default async function DashboardPage() {
     baseCurrency
   );
   const hasTodayQuotes = todaySecPnL.perAsset.size > 0;
+  const hasSecuritiesForKpi = secForTodayKpi.length > 0 || todaySecPnL.closedPositionCount > 0;
   const weekend = isWeekendBeijing(todayCn());
   const fxLast = getLastFxRefreshAt();
   const stocksLast = getLastStocksRefreshAt();
@@ -160,11 +159,11 @@ export default async function DashboardPage() {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="eyebrow">{hasLiabilities ? "净资产" : "总资产净值"}</div>
-              <div className="mt-2 flex items-baseline gap-3">
-                <span className="kpi-number text-5xl">
+              <div className="mt-2 flex flex-wrap items-baseline gap-3">
+                <span className="kpi-number text-3xl sm:text-5xl">
                   {formatMoney(totalLatest, baseCurrency, 2)}
                 </span>
-                <DeltaBadge value={delta} pct={deltaPct} currency={baseCurrency} label="较上次快照" />
+                <NetWorthDelta change={latestChange} currency={baseCurrency} />
               </div>
               {hasLiabilities && (
                 <div className="mt-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[12px]">
@@ -360,7 +359,7 @@ export default async function DashboardPage() {
                   !hasSecuritiesForKpi
                     ? "暂无证券持仓（或份额均为 0）"
                     : hasTodayQuotes
-                      ? `${todaySecPnL.perAsset.size} 只`
+                      ? `${todaySecPnL.perAsset.size} 只${todaySecPnL.closedPositions.length ? "（含今日已移除持仓）" : ""}${todaySecPnL.status === "partial" ? " · 部分覆盖" : ""}`
                       : weekend
                         ? "休市或无可用会话日"
                         : "无可用会话日"
@@ -492,7 +491,7 @@ export default async function DashboardPage() {
             </div>
           </div>
           <div className="card-body flex-1">
-            <HistoryChart data={snapshots} currency={baseCurrency} />
+            <HistoryChart data={historyPoints} currency={baseCurrency} />
           </div>
         </section>
       </div>
@@ -549,34 +548,6 @@ export default async function DashboardPage() {
 }
 
 /* ----------------- helper components ----------------- */
-
-function DeltaBadge({
-  value,
-  pct,
-  currency,
-  label
-}: {
-  value: number;
-  pct: number;
-  currency: string;
-  label: string;
-}) {
-  if (value === 0)
-    return <span className="chip tabular">—  {label}</span>;
-  const up = value > 0;
-  return (
-    <span className={`chip tabular ${up ? "chip-gain" : "chip-loss"}`}>
-      {up ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-      <span className="font-semibold">{formatPercent(pct)}</span>
-      <span className="opacity-60">·</span>
-      <span>
-        {up ? "+" : ""}
-        {formatMoney(value, currency)}
-      </span>
-      <span className="opacity-60">{label}</span>
-    </span>
-  );
-}
 
 function DeltaPill({ value, pct }: { value: number; pct: number }) {
   const up = value > 0;

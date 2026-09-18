@@ -2,6 +2,7 @@ import { getSetting } from "@/lib/db";
 import { kickoffRatesRefresh } from "@/lib/fx";
 import { ensureTodaySnapshot, listChanges, listSnapshots } from "@/lib/history";
 import { HistoryChart } from "@/components/charts/HistoryChart";
+import { buildNetWorthHistory } from "@/lib/netWorthHistory";
 import { formatDate, formatMoney, formatPercent, formatCnDateTime } from "@/lib/utils";
 import { RecordSnapshotButton } from "./_components/RecordSnapshotButton";
 
@@ -29,6 +30,7 @@ export default async function HistoryPage() {
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   ensureTodaySnapshot(baseCurrency);
   const snapshots = listSnapshots(baseCurrency, 3650);
+  const historyPoints = buildNetWorthHistory(snapshots);
   const changes = listChanges(500);
 
   const first = snapshots[0];
@@ -75,7 +77,7 @@ export default async function HistoryPage() {
           </div>
         </div>
         <div className="card-body">
-          <HistoryChart data={snapshots} currency={baseCurrency} />
+          <HistoryChart data={historyPoints} currency={baseCurrency} />
         </div>
       </div>
 

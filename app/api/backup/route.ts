@@ -2,17 +2,20 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDB } from "@/lib/db";
 import { nowCn, todayCn } from "@/lib/time";
+import { syncEntitySequences } from "@/lib/identity";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const db = getDB();
   const payload = {
-    version: 4,
+    version: 5,
     exported_at: nowCn(),
     category: db.prepare("SELECT * FROM category ORDER BY id").all(),
     account: db.prepare("SELECT * FROM account ORDER BY id").all(),
     asset: db.prepare("SELECT * FROM asset ORDER BY id").all(),
+    entity_id_sequence: db.prepare("SELECT * FROM entity_id_sequence ORDER BY entity").all(),
+    history_integrity: db.prepare("SELECT * FROM history_integrity").all(),
     fx_rate: db.prepare("SELECT * FROM fx_rate").all(),
     fx_rate_history: db
       .prepare("SELECT * FROM fx_rate_history ORDER BY observed_at, base, quote")
@@ -41,6 +44,9 @@ export async function GET() {
 
 const importSchema = z.object({
   version: z.number(),
+  entity_id_sequence: z.array(z.object({
+    entity: z.enum(["asset", "account"]), last_id: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
+  })).optional(),
   mode: z.enum(["replace", "merge"]).default("merge").optional(),
   category: z.array(z.any()).optional(),
   account: z.array(z.any()).optional(),
@@ -260,6 +266,17 @@ export async function POST(req: Request) {
         );
         for (const r of parsed.stock_price_daily) stmt.run(r);
       }
+      // 即使覆盖导入旧备份，身份高水位也不能降低。
+      for (const row of parsed.entity_id_sequence ?? []) {
+        db.prepare(`INSERT INTO entity_id_sequence (entity, last_id) VALUES (?, ?)
+          ON CONFLICT(entity) DO UPDATE SET last_id = MAX(last_id, excluded.last_id)`)
+          .run(row.entity, row.last_id);
+      }
+      syncEntitySequences(db);
+      // 导入可能改变任意历史段，不能继续宣称旧区间完整；不推测或拼接旧记录。
+      const importedAt = nowCn();
+      db.prepare("UPDATE history_integrity SET reliable_from = ?, last_import_at = ? WHERE id = 1")
+        .run(importedAt, importedAt);
     });
     tx();
     return NextResponse.json({ ok: true, mode });

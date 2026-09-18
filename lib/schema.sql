@@ -69,6 +69,18 @@ CREATE TABLE IF NOT EXISTS setting (
   value TEXT NOT NULL
 );
 
+-- 数字身份高水位独立于业务表保存，删除/恢复不会使新资产复用旧身份。
+CREATE TABLE IF NOT EXISTS entity_id_sequence (
+  entity TEXT PRIMARY KEY CHECK (entity IN ('asset', 'account')),
+  last_id INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS history_integrity (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  reliable_from TEXT NOT NULL,
+  last_import_at TEXT
+);
+
 -- 单笔资产的逐条变动日志
 CREATE TABLE IF NOT EXISTS asset_change (
   id INTEGER PRIMARY KEY,

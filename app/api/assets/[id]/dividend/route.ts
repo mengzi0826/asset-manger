@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getDB, type AssetRow, getSetting } from "@/lib/db";
-import { logAssetChange, ensureTodaySnapshot } from "@/lib/history";
+import { getDB, type AssetRow } from "@/lib/db";
+import { logAssetChange } from "@/lib/history";
 import { recordPortfolioEvent } from "@/lib/portfolioEvents";
+import { portfolioTransaction } from "@/lib/portfolioMutations";
 import { nowCn } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -77,7 +78,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       Math.round(Math.max(0, security.unit_cost! - parsed.amount / qty) * 1_000_000) / 1_000_000;
     const now = nowCn();
     const db = getDB();
-    const run = db.transaction(() => {
+    const run = portfolioTransaction(() => {
       const securityBefore = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
       db.prepare("UPDATE asset SET unit_cost = ?, updated_at = ? WHERE id = ?").run(nextUnitCost, now, id);
       const securityAfter = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
@@ -130,7 +131,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     });
 
     const result = run();
-    ensureTodaySnapshot(getSetting("base_currency") ?? "CNY");
     return NextResponse.json(result);
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? "Invalid" }, { status: 400 });

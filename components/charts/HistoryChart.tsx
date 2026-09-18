@@ -11,11 +11,14 @@ import {
   ReferenceLine
 } from "recharts";
 import { useTheme } from "@/lib/useTheme";
-import { formatCompact } from "@/lib/utils";
+import { formatCompact, formatMoney } from "@/lib/utils";
+import type { NetWorthChange } from "@/lib/netWorthChange";
+import { NetWorthBreakdown } from "@/components/NetWorthBreakdown";
 
 interface Point {
   date: string;
   total_value: number;
+  change: NetWorthChange;
 }
 
 export function HistoryChart({
@@ -33,10 +36,6 @@ export function HistoryChart({
         axisLine: "#1E293B",
         tick: "#64748B",
         refLine: "#334155",
-        tooltipBg: "#1E293B",
-        tooltipBorder: "#334155",
-        tooltipText: "#F1F5F9",
-        tooltipLabel: "#94A3B8",
         activeDotStroke: "#0B1020",
         gainStroke: "#F87171",
         lossStroke: "#34D399"
@@ -46,10 +45,6 @@ export function HistoryChart({
         axisLine: "#E7E4D9",
         tick: "#7A8699",
         refLine: "#D4D0C3",
-        tooltipBg: "#0F172A",
-        tooltipBorder: "#1E293B",
-        tooltipText: "#F8FAFC",
-        tooltipLabel: "#CBD5E1",
         activeDotStroke: "#FFFFFF",
         gainStroke: "#DC2626",
         lossStroke: "#059669"
@@ -68,7 +63,8 @@ export function HistoryChart({
 
   const rows = data.map((p) => ({
     date: p.date,
-    value: Number(p.total_value.toFixed(2))
+    value: Number(p.total_value.toFixed(2)),
+    change: p.change
   }));
 
   const first = rows[0].value;
@@ -77,9 +73,9 @@ export function HistoryChart({
   const stroke = up ? palette.gainStroke : palette.lossStroke;
 
   return (
-    <div className="h-[280px] w-full">
+    <div className="h-[280px] w-full" data-testid="net-worth-chart">
       <ResponsiveContainer>
-        <AreaChart data={rows} margin={{ top: 12, right: 12, bottom: 8, left: 0 }}>
+        <AreaChart accessibilityLayer data={rows} margin={{ top: 12, right: 12, bottom: 8, left: 0 }}>
           <defs>
             <linearGradient id="netWorthFill" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={stroke} stopOpacity={isDark ? 0.28 : 0.2} />
@@ -107,29 +103,22 @@ export function HistoryChart({
           />
           <ReferenceLine y={first} stroke={palette.refLine} strokeDasharray="3 3" />
           <Tooltip
-            wrapperStyle={{ outline: "none" }}
-            contentStyle={{
-              background: palette.tooltipBg,
-              border: `1px solid ${palette.tooltipBorder}`,
-              borderRadius: 6,
-              padding: "8px 12px",
-              fontSize: 12,
-              color: palette.tooltipText,
-              fontFamily: "JetBrains Mono, monospace"
+            wrapperStyle={{ outline: "none", zIndex: 20 }}
+            allowEscapeViewBox={{ x: false, y: true }}
+            position={{ y: 8 }}
+            content={({ active, payload }) => {
+              const point = payload?.[0]?.payload as (typeof rows)[number] | undefined;
+              if (!active || !point) return null;
+              return (
+                <div className="w-[300px] max-w-[calc(100vw-48px)] space-y-3 rounded-lg border border-hair-strong bg-canvas-raised p-3.5 shadow-pop">
+                  <div className="tabular text-[11px] text-ink-500">{point.date}</div>
+                  <div className="flex items-baseline justify-between gap-4 text-[13px] text-ink-900">
+                    <span>净值</span><span className="tabular font-semibold">{formatMoney(point.value, currency)}</span>
+                  </div>
+                  <NetWorthBreakdown change={point.change} currency={currency} compact />
+                </div>
+              );
             }}
-            labelStyle={{
-              color: palette.tooltipLabel,
-              fontSize: 10,
-              textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              marginBottom: 4
-            }}
-            itemStyle={{ color: palette.tooltipText, padding: 0 }}
-            formatter={(v: number) => [
-              `${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${currency}`,
-              "净值"
-            ]}
-            labelFormatter={(l) => l}
           />
           <Area
             type="monotone"

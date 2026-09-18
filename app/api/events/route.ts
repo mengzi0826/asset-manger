@@ -3,12 +3,14 @@ import { z } from "zod";
 import {
   getPortfolioEventCoverage,
   listPortfolioEvents,
+  summarizePortfolioEvents,
   type PortfolioEventType
 } from "@/lib/portfolioEvents";
+import { isCalendarDate } from "@/lib/analysisPeriod";
 
 export const dynamic = "force-dynamic";
 
-const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const dateSchema = z.string().refine(isCalendarDate, "日期无效");
 const allowedTypes: PortfolioEventType[] = [
   "asset_created",
   "asset_deleted",
@@ -28,6 +30,7 @@ export async function GET(req: Request) {
     const toDate = url.searchParams.get("to") || undefined;
     if (fromDate) dateSchema.parse(fromDate);
     if (toDate) dateSchema.parse(toDate);
+    if (fromDate && toDate && fromDate > toDate) throw new Error("from 不得晚于 to");
     const rawTypes = url.searchParams.getAll("type");
     const types = rawTypes.length
       ? rawTypes.map((type) => {
@@ -38,9 +41,15 @@ export async function GET(req: Request) {
     const limit = Number(url.searchParams.get("limit") ?? 500);
     if (!Number.isInteger(limit) || limit <= 0) throw new Error("limit 必须是正整数");
 
+    const summary = summarizePortfolioEvents(fromDate ?? "0001-01-01", toDate ?? "9999-12-31")
+      .filter(row => !types || types.includes(row.type));
+    const events = listPortfolioEvents({ fromDate, toDate, types, limit });
     return NextResponse.json({
       coverage: getPortfolioEventCoverage(),
-      events: listPortfolioEvents({ fromDate, toDate, types, limit })
+      summary,
+      totalCount: summary.reduce((sum, row) => sum + row.count, 0),
+      returnedCount: events.length,
+      events
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? "Invalid" }, { status: 400 });
