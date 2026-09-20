@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { getSetting } from "@/lib/db";
 import { kickoffRatesRefresh } from "@/lib/fx";
 import { ensureTodaySnapshot, listChanges, listSnapshots } from "@/lib/history";
@@ -41,18 +42,7 @@ export default async function HistoryPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="eyebrow">历史轨迹</div>
-          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900">
-            历史轨迹
-          </h1>
-          <p className="mt-0.5 text-[13px] text-ink-500">
-            资产总值快照曲线 + 每一次增删改的字段级明细
-          </p>
-        </div>
-        <RecordSnapshotButton />
-      </div>
+      <PageHeader title="历史" actions={<RecordSnapshotButton />} />
 
       {/* Summary strip */}
       {first && last && (
@@ -88,16 +78,16 @@ export default async function HistoryPage() {
         </div>
         <div className="card-body">
           {changes.length === 0 ? (
-            <div className="py-8 text-center text-[13px] text-ink-400">暂无变动记录</div>
+            <div className="py-8 text-center text-[14px] text-ink-400">暂无变动记录</div>
           ) : (
-            <ul className="divide-y divide-hair">
+            <ul className="history-log">
               {changes.map((c) => {
                 const fieldChanges: Record<string, { from: unknown; to: unknown }> = c.field_changes
                   ? JSON.parse(c.field_changes)
                   : {};
                 return (
                   <li key={c.id} className="py-3">
-                    <div className="flex flex-wrap items-center gap-2.5 text-[13px]">
+                    <div className="flex flex-wrap items-center gap-2.5 text-[14px]">
                       <span
                         className={`chip ${
                           c.action === "create"
@@ -112,17 +102,17 @@ export default async function HistoryPage() {
                       <span className="font-medium text-ink-900">
                         {c.asset_name ?? `#${c.asset_id ?? "-"}`}
                       </span>
-                      <span className="tabular text-[11px] text-ink-400">
+                      <span className="tabular text-[12px] text-ink-400">
                         {formatCnDateTime(c.created_at)}
                       </span>
                       {c.base_value_cny != null && (
-                        <span className="tabular ml-auto text-[12px] text-ink-500">
+                        <span className="tabular ml-auto text-[13px] text-ink-500">
                           ≈ {formatMoney(c.base_value_cny, "CNY")}
                         </span>
                       )}
                     </div>
                     {c.action === "update" && Object.keys(fieldChanges).length > 0 && (
-                      <ul className="mt-2 space-y-1 rounded-md bg-canvas-sunk/60 p-2.5 text-[12px] text-ink-600">
+                      <ul className="mt-2 space-y-1 rounded-md bg-canvas-sunk/60 p-2.5 text-[13px] text-ink-600">
                         {Object.entries(fieldChanges).map(([field, diff]) => (
                           <li key={field} className="flex flex-wrap items-center gap-1.5">
                             <span className="min-w-[70px] text-ink-400">
@@ -168,7 +158,7 @@ function SummaryCell({
       <div className="p-4">
         <div className="eyebrow">{label}</div>
         <div className={`tabular mt-1.5 text-[20px] font-semibold ${color}`}>{value}</div>
-        {hint && <div className="tabular mt-1 text-[11px] text-ink-400">{hint}</div>}
+        {hint && <div className="tabular mt-1 text-[12px] text-ink-400">{hint}</div>}
       </div>
     </div>
   );

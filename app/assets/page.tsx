@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { getDB, getSetting, type Account, type Category, type CategoryCode } from "@/lib/db";
@@ -50,31 +51,19 @@ export default async function AssetsPage({ searchParams }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="eyebrow">资产管理</div>
-          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900">
-            资产
-          </h1>
-          <p className="mt-0.5 text-[13px] text-ink-500">
-            共 {items.length} 笔资产 · {accounts.length} 个账户 · 以 {baseCurrency} 结算
-          </p>
-        </div>
-        <Link href={newAssetHref(activeCat)} className="btn-primary">
-          <Plus className="h-3.5 w-3.5" /> 新增资产
-        </Link>
-      </div>
+      <PageHeader title="资产" description={<>共 {items.length} 笔资产 · {accounts.length} 个账户 · 以 {baseCurrency} 结算</>} actions={<Link href={newAssetHref(activeCat) + (activeCat === "all" ? "?cat=all" : "")} className="btn-primary"><Plus className="h-4 w-4" />新增资产</Link>} />
 
       <AccountManager categories={categories} accounts={accounts} />
 
       <div className="card">
         <CategoryTabs active={activeCat} tabs={tabs} currency={baseCurrency} />
         {accounts.length === 0 ? (
-          <div className="py-14 text-center text-[13px] text-ink-400">
+          <div className="py-14 text-center text-[14px] text-ink-400">
             先在上方创建账户后再添加资产。
           </div>
         ) : (
           <AssetsTable
+            key={activeCat}
             items={filtered}
             baseCurrency={baseCurrency}
             totalAssets={totalAssets}

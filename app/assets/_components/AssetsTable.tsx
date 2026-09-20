@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, Search, X } from "lucide-react";
 import type { ValuedAsset } from "@/lib/valuation";
 import type { CategoryCode } from "@/lib/db";
 import { formatDate, formatMoney, formatPercent } from "@/lib/utils";
+import Link from "next/link";
+import { editAssetHref } from "@/lib/assetsNav";
 import { AssetRowActions } from "./AssetRowActions";
 
 function categoryColor(code: CategoryCode): string {
@@ -45,6 +47,39 @@ export function AssetsTable({
   const [selectedCurrencies, setSelectedCurrencies] = useState<string[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
 
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("default");
+  const [restored, setRestored] = useState(false);
+  const storageKey = `asset-manager:filters:${returnCat}`;
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "null");
+      if (saved) {
+        if (Array.isArray(saved.currencies)) setSelectedCurrencies(saved.currencies.filter((v: unknown) => typeof v === "string"));
+        if (Array.isArray(saved.accounts)) setSelectedAccountIds(saved.accounts.filter((v: unknown) => typeof v === "number"));
+        if (typeof saved.query === "string") setQuery(saved.query);
+        if (["default", "value", "name"].includes(saved.sort)) setSort(saved.sort);
+      }
+    } catch { /* Browser storage is optional. */ }
+    setRestored(true);
+  }, [storageKey]);
+  useEffect(() => {
+    if (!restored) return;
+    try { sessionStorage.setItem(storageKey, JSON.stringify({ currencies: selectedCurrencies, accounts: selectedAccountIds, query, sort })); } catch {}
+  }, [restored, storageKey, selectedCurrencies, selectedAccountIds, query, sort]);
+  useEffect(() => {
+    if (!restored) return;
+    let frame = 0;
+    try {
+      const y = sessionStorage.getItem(`${storageKey}:scroll`);
+      if (y != null) {
+        sessionStorage.removeItem(`${storageKey}:scroll`);
+        frame = requestAnimationFrame(() => window.scrollTo(0, Number(y) || 0));
+      }
+    } catch {}
+    return () => cancelAnimationFrame(frame);
+  }, [restored, storageKey]);
+
   const currencies = useMemo(
     () => Array.from(new Set(items.map((a) => a.currency))).sort(),
     [items]
@@ -67,7 +102,9 @@ export function AssetsTable({
   }, [items]);
 
   const filtered = useMemo(() => {
-    return items.filter((a) => {
+    const needle = query.trim().toLocaleLowerCase();
+    const result = items.filter((a) => {
+      if (needle && ![a.name, a.symbol, a.account_name].some((value) => value?.toLocaleLowerCase().includes(needle))) return false;
       if (
         selectedCurrencies.length > 0 &&
         !selectedCurrencies.includes(a.currency)
@@ -80,7 +117,10 @@ export function AssetsTable({
         return false;
       return true;
     });
-  }, [items, selectedCurrencies, selectedAccountIds]);
+    if (sort === "value") result.sort((a, b) => b.base_value - a.base_value);
+    if (sort === "name") result.sort((a, b) => a.name.localeCompare(b.name, "zh"));
+    return result;
+  }, [items, selectedCurrencies, selectedAccountIds, query, sort]);
 
   const filteredAssetTotal = filtered
     .filter((a) => a.category_code !== "liability")
@@ -90,7 +130,7 @@ export function AssetsTable({
     .reduce((s, a) => s + a.base_value, 0);
   const filteredTotal = filteredAssetTotal - filteredLiabTotal;
   const hasFilter =
-    selectedCurrencies.length > 0 || selectedAccountIds.length > 0;
+    selectedCurrencies.length > 0 || selectedAccountIds.length > 0 || query.trim().length > 0;
 
   function toggleCurrency(c: string) {
     setSelectedCurrencies((prev) =>
@@ -105,16 +145,21 @@ export function AssetsTable({
   function clearAll() {
     setSelectedCurrencies([]);
     setSelectedAccountIds([]);
+    setQuery("");
   }
 
   return (
     <>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-hair px-6 py-4">
+        <label className="relative min-w-0 flex-1 sm:max-w-sm"><Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-ink-400" /><input className="input pl-10" aria-label="搜索资产" placeholder="搜索资产、代码或账户" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+        <select className="input-sm" aria-label="资产排序" value={sort} onChange={(event) => setSort(event.target.value)}><option value="default">默认排序</option><option value="value">估值从高到低</option><option value="name">按名称排序</option></select>
+      </div>
       {/* 过滤条 */}
       {items.length > 0 && (currencies.length > 1 || accounts.length > 1) && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-hair px-4 py-3">
           {currencies.length > 1 && (
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="mr-0.5 text-[11px] font-semibold uppercase tracking-wider text-ink-400">
+              <span className="mr-0.5 text-[12px] font-semibold uppercase tracking-wider text-ink-400">
                 币种
               </span>
               {currencies.map((c) => {
@@ -126,7 +171,7 @@ export function AssetsTable({
                     onClick={() => toggleCurrency(c)}
                     className={`chip tabular transition ${
                       active
-                        ? "border-gold-500 bg-gold-100 text-gold-700"
+                        ? "border-brand-500 bg-brand-100 text-brand-700"
                         : "hover:border-ink-400 hover:text-ink-900"
                     }`}
                     aria-pressed={active}
@@ -143,37 +188,19 @@ export function AssetsTable({
           )}
 
           {accounts.length > 1 && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="mr-0.5 text-[11px] font-semibold uppercase tracking-wider text-ink-400">
-                账户
-              </span>
-              {accounts.map((a) => {
-                const active = selectedAccountIds.includes(a.id);
-                return (
-                  <button
-                    key={a.id}
-                    type="button"
-                    onClick={() => toggleAccount(a.id)}
-                    title={a.category}
-                    className={`chip transition ${
-                      active
-                        ? "border-gold-500 bg-gold-100 text-gold-700"
-                        : "hover:border-ink-400 hover:text-ink-900"
-                    }`}
-                    aria-pressed={active}
-                  >
-                    {a.name}
-                  </button>
-                );
-              })}
-            </div>
+            <details className="account-filter" onKeyDown={(event) => { if (event.key === "Escape") event.currentTarget.open = false; }}>
+              <summary className="btn-outline cursor-pointer list-none">账户{selectedAccountIds.length ? ` · 已选 ${selectedAccountIds.length}` : " · 全部"}<ChevronDown className="h-3.5 w-3.5" /></summary>
+              <div className="account-filter-options">
+                {accounts.map((a) => <label key={a.id} className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-canvas-sunk"><input type="checkbox" checked={selectedAccountIds.includes(a.id)} onChange={() => toggleAccount(a.id)} className="h-4 w-4 accent-brand-500" /><span className="min-w-0 flex-1 text-sm text-ink-700">{a.name}<small className="block text-xs text-ink-400">{a.category}</small></span></label>)}
+              </div>
+            </details>
           )}
 
           {hasFilter && (
             <button
               type="button"
               onClick={clearAll}
-              className="btn-ghost ml-auto h-7 px-2 text-[11px]"
+              className="btn-ghost ml-auto h-7 px-2 text-[12px]"
               aria-label="清除筛选"
             >
               <X className="h-3 w-3" /> 清除
@@ -184,7 +211,7 @@ export function AssetsTable({
 
       {/* 筛选小计 */}
       {hasFilter && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-hair bg-canvas-sunk px-4 py-2 text-[12px] text-ink-500">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-hair bg-canvas-sunk px-4 py-2 text-[13px] text-ink-500">
           <span>
             匹配{" "}
             <span className="font-medium text-ink-900 tabular">
@@ -227,9 +254,13 @@ export function AssetsTable({
         </div>
       )}
 
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto" onClickCapture={(event) => {
+        if ((event.target as HTMLElement).closest("a")) {
+          try { sessionStorage.setItem(`${storageKey}:scroll`, String(window.scrollY)); } catch {}
+        }
+      }}>
         {filtered.length === 0 ? (
-          <div className="py-14 text-center text-[13px] text-ink-400">
+          <div className="py-14 text-center text-[14px] text-ink-400">
             {items.length === 0 ? (
               "此分类下暂无资产。"
             ) : (
@@ -246,7 +277,7 @@ export function AssetsTable({
             )}
           </div>
         ) : (
-          <table className="data-table">
+          <table className="data-table min-w-[860px]">
             <thead>
               <tr>
                 <th className="text-left">名称 / 账户</th>
@@ -271,14 +302,14 @@ export function AssetsTable({
                     <td className="text-left">
                       <div className="flex flex-col">
                         <span className="flex items-center gap-2">
-                          <span className="font-medium text-ink-900">{a.name}</span>
+                          <Link href={editAssetHref(a.id, returnCat) + (returnCat === "all" ? "?cat=all" : "")} className="font-medium text-ink-900 hover:text-brand-600">{a.name}</Link>
                           {a.symbol && (
-                            <span className="chip tabular text-[10px] uppercase">
+                            <span className="chip tabular text-[11px] uppercase">
                               {a.symbol}
                             </span>
                           )}
                         </span>
-                        <span className="text-[11px] text-ink-400">
+                        <span className="text-[12px] text-ink-400">
                           <span
                             className="mr-1.5 inline-block h-1.5 w-1.5 rounded-sm align-middle"
                             style={{ background: categoryColor(a.category_code) }}
@@ -330,7 +361,7 @@ export function AssetsTable({
                         </span>
                       )}
                     </td>
-                    <td className="tabular text-right text-[12px] text-ink-500">
+                    <td className="tabular text-right text-[13px] text-ink-500">
                       {a.maturity_date ? (
                         formatDate(a.maturity_date)
                       ) : (

@@ -126,14 +126,14 @@ export function StockManager({
         </button>
       </div>
       <div className="card-body space-y-4">
-        <div className="rounded-md bg-canvas-sunk/60 p-3 text-[12px] text-ink-500">
+        <div className="rounded-md bg-canvas-sunk/60 p-3 text-[13px] text-ink-500">
           <div>
             工作日北京时间 <span className="font-semibold text-ink-700">10:00</span> 与{" "}
             <span className="font-semibold text-ink-700">14:00</span> 后各自动刷新一次（已配置股票
             AppKey 时生效）。周末自动跳过；手动刷新周末仍会请求。沪深/港股按今日、
             美股按最近交易日计算当日盈亏。
           </div>
-          <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-ink-400">
+          <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-[12px] text-ink-400">
             <span>
               上次自动刷新：
               <span className="tabular ml-1 text-ink-600">
@@ -148,7 +148,7 @@ export function StockManager({
         </div>
 
         {missingSymbolCount > 0 && (
-          <div className="flex items-start gap-2 rounded-md border border-gold-200 bg-gold-50 px-3 py-2 text-[12px] text-gold-800">
+          <div className="flex items-start gap-2 rounded-md border border-gold-200 bg-gold-50 px-3 py-2 text-[13px] text-gold-800">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
               有 {missingSymbolCount} 条证券资产尚未填写（或无法识别）股票代码，自动刷新会跳过它们，请到「资产」编辑页补充。
@@ -161,11 +161,11 @@ export function StockManager({
         {msg && (
           <div
             role={msg.tone === "error" ? "alert" : "status"}
-            className={`rounded-md border px-3 py-2 text-[12px] ${
+            className={`rounded-md border px-3 py-2 text-[13px] ${
               msg.tone === "error"
-                ? "border-loss-100 bg-loss-50 text-loss-700"
+                ? "border-gain-100 bg-gain-50 text-gain-700"
                 : msg.tone === "success"
-                  ? "border-gain-100 bg-gain-50 text-gain-700"
+                  ? "border-loss-100 bg-loss-50 text-loss-700"
                   : "border-hair bg-canvas-sunk text-ink-500"
             }`}
           >
@@ -177,20 +177,20 @@ export function StockManager({
         )}
 
         <details className="rounded-md border border-hair bg-canvas-sunk/40 px-3 py-2">
-          <summary className="cursor-pointer text-[12px] font-medium text-ink-600">
+          <summary className="cursor-pointer text-[13px] font-medium text-ink-600">
             接口调用日志
             {refreshFailures.length > 0 && (
-              <span className="ml-2 rounded-full bg-loss-100 px-1.5 py-0.5 text-[11px] text-loss-700">
+              <span className="ml-2 rounded-full bg-loss-100 px-1.5 py-0.5 text-[12px] text-loss-700">
                 {refreshFailures.length} 条失败
               </span>
             )}
           </summary>
           <div className="mt-3 space-y-2">
-            <div className="text-[11px] text-ink-400">
+            <div className="text-[12px] text-ink-400">
               每次单股接口调用写入本地 SQLite，此处展示最近 30 条失败记录，便于排查未刷新原因。
             </div>
             {refreshFailures.length > 0 ? (
-              <div className="overflow-hidden rounded-md border border-loss-100">
+              <div className="overflow-x-auto rounded-md border border-gain-100">
                 <table className="data-table">
                   <thead>
                     <tr>
@@ -204,20 +204,20 @@ export function StockManager({
                   <tbody>
                     {refreshFailures.map((log) => (
                       <tr key={log.id}>
-                        <td className="tabular text-[11px] text-ink-400">
+                        <td className="tabular text-[12px] text-ink-400">
                           {formatCnDateTime(log.created_at)}
                         </td>
                         <td>{log.asset_name ?? "—"}</td>
                         <td className="tabular">{log.symbol ?? "—"}</td>
-                        <td className="tabular text-[11px] text-ink-500">{log.api_param ?? "—"}</td>
-                        <td className="text-[11px] text-loss-600">{log.error ?? "未知错误"}</td>
+                        <td className="tabular text-[12px] text-ink-500">{log.api_param ?? "—"}</td>
+                        <td className="text-[12px] text-gain-700">{log.error ?? "未知错误"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             ) : (
-              <div className="rounded-md border border-hair bg-canvas-sunk/60 px-3 py-2 text-[12px] text-ink-500">
+              <div className="rounded-md border border-hair bg-canvas-sunk/60 px-3 py-2 text-[13px] text-ink-500">
                 暂无失败记录。
               </div>
             )}
@@ -253,7 +253,7 @@ export function StockManager({
                     <tr key={it.asset_id}>
                       <td>
                         <div className="font-medium text-ink-900">{it.name}</div>
-                        <div className="mt-0.5 text-[11px] text-ink-400">{it.account_name}</div>
+                        <div className="mt-0.5 text-[12px] text-ink-400">{it.account_name}</div>
                       </td>
                       <td className="tabular">{it.symbol || <span className="text-ink-400">—</span>}</td>
                       <td>
@@ -262,7 +262,7 @@ export function StockManager({
                         ) : it.symbol ? (
                           <span className="chip chip-gold">代码无法识别</span>
                         ) : (
-                          <span className="text-[12px] text-ink-400">未填</span>
+                          <span className="text-[13px] text-ink-400">未填</span>
                         )}
                       </td>
                       <td className="tabular text-right">
@@ -270,7 +270,7 @@ export function StockManager({
                       </td>
                       <td className="tabular text-right">
                         {refItem?.error ? (
-                          <span className="text-[11px] text-loss-600">{refItem.error}</span>
+                          <span className="text-[12px] text-loss-600">{refItem.error}</span>
                         ) : d ? (
                           <span
                             className={
@@ -287,7 +287,7 @@ export function StockManager({
                           <span className="text-ink-400">—</span>
                         )}
                       </td>
-                      <td className="tabular text-[11px] text-ink-400">
+                      <td className="tabular text-[12px] text-ink-400">
                         {formatCnDateTime(it.updated_at)}
                       </td>
                     </tr>

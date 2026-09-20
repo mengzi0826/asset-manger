@@ -1,14 +1,11 @@
+import { PageHeader } from "@/components/PageHeader";
 import Link from "next/link";
 import {
-  Activity,
   AlertCircle,
   AlertTriangle,
-  CalendarClock,
   CheckCircle2,
   ExternalLink,
-  Percent,
   Plus,
-  TrendingUp,
   Wallet
 } from "lucide-react";
 import { getDB, getSetting } from "@/lib/db";
@@ -35,7 +32,7 @@ import { BaseCurrencyPicker } from "./_components/BaseCurrencyPicker";
 import { formatDate, formatMoney, formatPercent, formatCnDateTime } from "@/lib/utils";
 import { getJuheFxAppKey, getJuheStockAppKey } from "@/lib/juheKeys";
 import { isWeekendBeijing, todayCn, shouldRefreshFxEvery8h, shouldRefreshStocksBy10And14 } from "@/lib/time";
-import { DataFreshnessBanner, DataFreshnessLine } from "./_components/DataFreshness";
+import { DataFreshnessBanner } from "./_components/DataFreshness";
 
 export const dynamic = "force-dynamic";
 
@@ -147,226 +144,55 @@ export default async function DashboardPage() {
   }));
   const db = getDB();
   const accountCount = (db.prepare("SELECT COUNT(*) AS c FROM account").get() as { c: number }).c;
-  const lastUpdated = db
-    .prepare("SELECT MAX(updated_at) AS t FROM asset")
-    .get() as { t: string | null };
 
   return (
     <div className="space-y-6">
-      {/* Hero: 总资产 */}
-      <section className="card">
-        <div className="card-body space-y-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="eyebrow">{hasLiabilities ? "净资产" : "总资产净值"}</div>
-              <div className="mt-2 flex flex-wrap items-baseline gap-3">
-                <span className="kpi-number text-3xl sm:text-5xl">
-                  {formatMoney(totalLatest, baseCurrency, 2)}
-                </span>
-                <NetWorthDelta change={latestChange} currency={baseCurrency} />
-              </div>
-              {hasLiabilities && (
-                <div className="mt-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[12px]">
-                  <span className="flex items-baseline gap-1.5">
-                    <span className="text-ink-400">总资产</span>
-                    <span className="tabular font-medium text-ink-800">
-                      {formatMoney(totalAssets, baseCurrency)}
-                    </span>
-                  </span>
-                  <span className="flex items-baseline gap-1.5">
-                    <span className="text-ink-400">总负债</span>
-                    <span className="tabular font-medium text-loss-700">
-                      -{formatMoney(totalLiabilities, baseCurrency)}
-                    </span>
-                  </span>
-                  {totalAssets > 0 && (
-                    <span className="flex items-baseline gap-1.5">
-                      <span className="text-ink-400">负债率</span>
-                      <span className="tabular font-medium text-ink-700">
-                        {formatPercent(totalLiabilities / totalAssets, 1)}
-                      </span>
-                    </span>
-                  )}
-                </div>
-              )}
-              {hasAssets && (
-                <div className="mt-3 flex flex-wrap items-stretch gap-2">
-                  {nativeShown.map((n) => (
-                    <NativeTotalChip
-                      key={n.code}
-                      code={n.code}
-                      value={n.value}
-                      count={n.count}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <BaseCurrencyPicker current={baseCurrency} />
-              <Link href="/assets/new" className="btn-primary">
-                <Plus className="h-3.5 w-3.5" /> 新增
-              </Link>
-            </div>
-          </div>
+      <PageHeader title="总览" description={<span className="tabular">{formatDate(todayCn())}</span>} actions={<><BaseCurrencyPicker current={baseCurrency} /><Link href="/assets/new" className="btn-primary"><Plus className="h-4 w-4" />新增资产</Link></>} />
 
-          {/* 最近变动：单行垂直跑马灯（每条 ~2.8s 停留，hover 暂停） */}
-          {recentChanges.length > 0 && (
-            <div className="flex items-center gap-3 border-t border-hair pt-3 text-[12px]">
-              <span className="shrink-0 text-[11px] font-medium uppercase tracking-wider text-ink-400">
-                最近变动
-              </span>
-              {recentChanges.length === 1 ? (
-                // 仅 1 条无需滚动，直接静态展示
-                <div className="flex-1 min-w-0 truncate">
-                  <RecentChangeRow c={recentChanges[0]} />
-                </div>
-              ) : (
-                <div
-                  className="marquee-v flex-1 min-w-0"
-                  aria-label="最近变动滚动列表，鼠标悬停可暂停"
-                  tabIndex={0}
-                >
-                  <ul
-                    className="marquee-v-track"
-                    style={{
-                      animationDuration: `${Math.max(
-                        recentChanges.length * 2.8,
-                        12
-                      )}s`
-                    }}
-                  >
-                    {/* 渲染两份首尾相接，配合 translateY(-50%) 无缝循环 */}
-                    {[...recentChanges, ...recentChanges].map((c, i) => (
-                      <li
-                        key={`${c.id}-${i}`}
-                        className="marquee-v-row"
-                        aria-hidden={i >= recentChanges.length || undefined}
-                      >
-                        <RecentChangeRow c={c} />
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              <Link
-                href="/history"
-                className="shrink-0 text-[11px] text-ink-500 hover:text-gold-500"
-              >
-                查看全部
-              </Link>
+      <section className="card dashboard-hero" aria-label="资产总览">
+        <div className="net-worth-grid">
+          <div className="net-worth-primary">
+            <h2 className="net-worth-label">净资产</h2>
+            <div className="net-worth-value tabular">{formatMoney(totalLatest, baseCurrency, 2)}</div>
+            <NetWorthDelta change={latestChange} currency={baseCurrency} variant="plain" />
+          </div>
+          <div className="net-worth-metric">
+            <h2 className="net-worth-label">总资产</h2>
+            <div className="net-worth-metric-value tabular">{formatMoney(totalAssets, baseCurrency)}</div>
+          </div>
+          <div className="net-worth-metric">
+            <h2 className="net-worth-label">累计变化</h2>
+            <div className={`net-worth-metric-value tabular ${!firstSnap ? "text-ink-400" : totalSinceStart > 0 ? "text-gain-700" : totalSinceStart < 0 ? "text-loss-700" : "text-ink-900"}`}>
+              {firstSnap ? `${totalSinceStart >= 0 ? "+" : ""}${formatMoney(totalSinceStart, baseCurrency)}` : "—"}
             </div>
-          )}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-hair pt-3 text-[11px] text-ink-400">
-            <span>
-              共 {valuation.items.length} 笔资产 · {accountCount} 个账户
-            </span>
-            {firstSnap && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="tabular">
-                  快照数 {snapshots.length} 个历史点
-                </span>
-              </>
-            )}
-            {lastUpdated.t && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="tabular">
-                  最近更新 {formatCnDateTime(lastUpdated.t).slice(0, 16)}
-                </span>
-              </>
-            )}
-            <DataFreshnessLine {...freshness} />
+            {firstSnap && <div className="net-worth-note">较首条快照 <span className="tabular">{formatPercent(totalSincePct)}</span></div>}
+          </div>
+          <div className="net-worth-metric">
+            <h2 className="net-worth-label">证券当日</h2>
+            <div className={`net-worth-metric-value tabular ${!hasTodayQuotes ? "text-ink-400" : todaySecPnL.totalBase > 0 ? "text-gain-700" : todaySecPnL.totalBase < 0 ? "text-loss-700" : "text-ink-900"}`}>
+              {hasTodayQuotes ? `${todaySecPnL.totalBase > 0 ? "+" : ""}${formatMoney(todaySecPnL.totalBase, baseCurrency)}` : "—"}
+            </div>
+            <div className="net-worth-note">
+              {!hasSecuritiesForKpi ? "暂无证券持仓" : hasTodayQuotes
+                ? `${todaySecPnL.perAsset.size} 只${todaySecPnL.closedPositions.length ? "（含今日已移除持仓）" : ""}${todaySecPnL.status === "partial" ? " · 部分覆盖" : ""}`
+                : weekend ? "休市或无可用会话日" : "无可用会话日"}
+              {hasTodayQuotes && todaySecPnL.sessionDates.us && <span className="block tabular">美股交易日 {formatDate(todaySecPnL.sessionDates.us)}</span>}
+            </div>
           </div>
         </div>
-      </section>
 
-      {/* 资产摘要：把 4 个核心指标拆成独立瓦片 + 即将到期单独成行 */}
-      {hasAssets && (
-        <section className="card">
-          <div className="card-header">
-            <div className="card-title">资产摘要</div>
-            <span className="text-[11px] text-ink-400">以 {baseCurrency} 结算</span>
-          </div>
-          <div className="card-body space-y-4">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {firstSnap && (
-                <SummaryTile
-                  icon={<TrendingUp className="h-3.5 w-3.5" />}
-                  label="累计变化"
-                  tone={
-                    totalSinceStart > 0
-                      ? "gain"
-                      : totalSinceStart < 0
-                        ? "loss"
-                        : "neutral"
-                  }
-                  value={
-                    <span className="tabular">
-                      {totalSinceStart >= 0 ? "+" : ""}
-                      {formatMoney(totalSinceStart, baseCurrency)}
-                    </span>
-                  }
-                  hint={<DeltaPill value={totalSinceStart} pct={totalSincePct} />}
-                />
-              )}
-              <SummaryTile
-                icon={<Activity className="h-3.5 w-3.5" />}
-                label="浮动盈亏"
-                tone={
-                  kpis.unrealized > 0
-                    ? "gain"
-                    : kpis.unrealized < 0
-                      ? "loss"
-                      : "neutral"
-                }
-                value={
-                  <span className="tabular">
-                    {kpis.unrealized > 0 ? "+" : ""}
-                    {formatMoney(kpis.unrealized, baseCurrency)}
-                  </span>
-                }
-                hint={
-                  kpis.investedCost > 0
-                    ? `成本回报 ${formatPercent(kpis.unrealized / kpis.investedCost, 2)}`
-                    : "暂无成本数据"
-                }
+        {hasAssets && (
+          <div className="portfolio-summary" aria-label="资产摘要">
+            <div className="summary-metrics">
+              <SummaryMetric
+                label="总负债"
+                tone="neutral"
+                value={formatMoney(totalLiabilities, baseCurrency)}
+                hint={hasLiabilities && totalAssets > 0
+                  ? `负债率 ${formatPercent(totalLiabilities / totalAssets, 1)}`
+                  : undefined}
               />
-              <SummaryTile
-                icon={<CalendarClock className="h-3.5 w-3.5" />}
-                label="证券当日"
-                tone={
-                  !hasTodayQuotes
-                    ? "muted"
-                    : todaySecPnL.totalBase > 0
-                      ? "gain"
-                      : todaySecPnL.totalBase < 0
-                        ? "loss"
-                        : "neutral"
-                }
-                value={
-                  hasTodayQuotes ? (
-                    <span className="tabular">
-                      {todaySecPnL.totalBase > 0 ? "+" : ""}
-                      {formatMoney(todaySecPnL.totalBase, baseCurrency)}
-                    </span>
-                  ) : (
-                    <span className="tabular text-ink-400">—</span>
-                  )
-                }
-                hint={
-                  !hasSecuritiesForKpi
-                    ? "暂无证券持仓（或份额均为 0）"
-                    : hasTodayQuotes
-                      ? `${todaySecPnL.perAsset.size} 只${todaySecPnL.closedPositions.length ? "（含今日已移除持仓）" : ""}${todaySecPnL.status === "partial" ? " · 部分覆盖" : ""}`
-                      : weekend
-                        ? "休市或无可用会话日"
-                        : "无可用会话日"
-                }
-              />
-              <SummaryTile
-                icon={<Percent className="h-3.5 w-3.5" />}
+              <SummaryMetric
                 label="加权年化"
                 tone="info"
                 value={
@@ -382,14 +208,14 @@ export default async function DashboardPage() {
                     : "未填写年化利率"
                 }
               />
+              {nativeShown.map((n) => <NativeTotalMetric key={n.code} code={n.code} value={n.value} count={n.count} />)}
             </div>
-
             {upcoming.length > 0 && (
-              <div className="flex items-center gap-3 border-t border-hair pt-3 text-[12px]">
-                <span className="shrink-0 text-[11px] font-medium uppercase tracking-wider text-ink-400">
+              <div className="summary-maturity flex flex-wrap items-center gap-3 border-t border-hair text-[12px]">
+                <span className="shrink-0 text-[12px] font-medium uppercase tracking-wider text-ink-400">
                   即将到期
                 </span>
-                <div className="flex-1 overflow-x-auto">
+                <div className="min-w-0 flex-1 overflow-x-auto">
                   <ul className="flex items-center gap-4 whitespace-nowrap">
                     {upcoming.map((a) => (
                       <li key={a.id} className="flex items-center gap-2">
@@ -413,55 +239,30 @@ export default async function DashboardPage() {
                     ))}
                   </ul>
                 </div>
-                <span className="shrink-0 text-[11px] text-ink-400">
+                <span className="shrink-0 text-[12px] text-ink-400">
                   60 天内 · {upcoming.length} 笔
                 </span>
               </div>
             )}
           </div>
-        </section>
-      )}
+        )}
+      </section>
 
-      {valuation.missingRates.length > 0 && (
-        <div className="flex items-start gap-2 rounded-md border border-gold-200 bg-gold-100 px-4 py-3 text-[13px] text-gold-700">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>
-            部分汇率缺失：
-            <span className="tabular font-medium">{valuation.missingRates.join("、")}</span>
-            。请前往「设置 · 汇率」刷新或手动录入。
+      <div className="dashboard-charts">
+        <section className="card flex flex-col">
+          <div className="card-body flex-1">
+            <HistoryChart data={historyPoints} currency={baseCurrency} title="净值走势" />
           </div>
-        </div>
-      )}
-      <DataFreshnessBanner {...freshness} />
-
-      {/* 资产构成 + 净值走势 左右双列（仿照证券页布局） */}
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 xl:items-stretch">
-        {/* 左：资产构成 */}
+        </section>
         <section className="card flex flex-col">
           <div className="card-header gap-4">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="card-title shrink-0">资产构成</div>
-              {hasAssets && (
-                <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                  <AllocationStat
-                    label="现金等价物"
-                    value={kpis.liquidity}
-                    total={totalAssets}
-                    currency={baseCurrency}
-                  />
-                  <AllocationStat
-                    label="投资类"
-                    value={kpis.invested}
-                    total={totalAssets}
-                    currency={baseCurrency}
-                    hint="基金/股票/其他"
-                  />
-                </div>
-              )}
+              <h2 className="card-title shrink-0">资产分布</h2>
+
             </div>
             <Link
               href="/assets"
-              className="inline-flex shrink-0 items-center gap-1 text-[11px] text-ink-500 hover:text-gold-500"
+              className="inline-flex shrink-0 items-center gap-1 text-[12px] text-brand-600 hover:text-brand-700"
             >
               查看明细
               <ExternalLink className="h-3 w-3" />
@@ -472,29 +273,32 @@ export default async function DashboardPage() {
               data={allocationByCategory}
               currency={baseCurrency}
               total={totalAssets}
+              compact
             />
           </div>
         </section>
-
-        {/* 右：净值走势 */}
-        <section className="card flex flex-col">
-          <div className="card-header">
-            <div className="flex items-center gap-3">
-              <div className="card-title">净值走势</div>
-              <span className="chip tabular">以 {baseCurrency} 结算</span>
-            </div>
-            <div className="flex items-center gap-3 text-[11px] text-ink-400">
-              <span>{snapshots.length} 个历史点</span>
-              <Link href="/history" className="text-gold-500 hover:text-gold-600">
-                查看全部
-              </Link>
-            </div>
-          </div>
-          <div className="card-body flex-1">
-            <HistoryChart data={historyPoints} currency={baseCurrency} />
-          </div>
-        </section>
       </div>
+
+      {valuation.missingRates.length > 0 && (
+        <div className="flex items-start gap-2 rounded-md border border-gold-200 bg-gold-100 px-4 py-3 text-[14px] text-gold-700">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            部分汇率缺失：
+            <span className="tabular font-medium">{valuation.missingRates.join("、")}</span>
+            。请前往「设置 · 汇率」刷新或手动录入。
+          </div>
+        </div>
+      )}
+      <DataFreshnessBanner {...freshness} />
+
+      {recentChanges.length > 0 && (
+        <section className="card">
+          <div className="card-header"><h2 className="card-title">最近变动</h2><Link href="/history" className="text-[13px] text-brand-600 hover:text-brand-700">查看全部 →</Link></div>
+          <ul className="divide-y divide-hair/60 px-6">
+            {recentChanges.slice(0, 3).map((c) => <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 py-4 text-[13px]"><RecentChangeRow c={c} /></li>)}
+          </ul>
+        </section>
+      )}
 
       {/* 智能建议（独占一行） */}
       <section className="card">
@@ -523,7 +327,7 @@ export default async function DashboardPage() {
                   <CheckCircle2 className="h-4 w-4 text-ink-500" />
                 )}
               </span>
-              <div className="min-w-0 text-[13px]">
+              <div className="min-w-0 text-[14px]">
                 <div
                   className={`font-medium ${
                     s.level === "danger"
@@ -543,172 +347,44 @@ export default async function DashboardPage() {
       </section>
 
       {!hasAssets && <OnboardingBanner accountCount={accountCount} />}
+
     </div>
   );
 }
 
 /* ----------------- helper components ----------------- */
 
-function DeltaPill({ value, pct }: { value: number; pct: number }) {
-  const up = value > 0;
-  return (
-    <span
-      className={`tabular inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] font-medium ${
-        value === 0
-          ? "bg-canvas-sunk text-ink-400"
-          : up
-            ? "bg-gain-50 text-gain-700"
-            : "bg-loss-50 text-loss-700"
-      }`}
-    >
-      {value === 0 ? "—" : up ? "▲" : "▼"}
-      {formatPercent(pct)}
-    </span>
-  );
-}
-
-function KpiInline({
-  label,
-  value,
-  hint
-}: {
-  label: string;
-  value: React.ReactNode;
-  hint?: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <span className="text-ink-400">{label}</span>
-      <span className="tabular font-medium text-ink-800">{value}</span>
-      {hint && <span className="text-ink-400">{hint}</span>}
-    </div>
-  );
-}
-
-/**
- * 资产摘要里的指标瓦片：左侧一根 2px 语义色条 + 顶部图标&标签 + 主数值 + hint。
- * tone 对应的色彩语义：
- *   gain  → 红涨绿跌的「涨」（红）
- *   loss  → 红涨绿跌的「跌」（绿）
- *   info  → 中性高亮（金色，强调）
- *   neutral / muted → 暗淡，不带色
- */
-function SummaryTile({
-  icon,
-  label,
-  value,
-  hint,
-  tone
-}: {
-  icon: React.ReactNode;
+function SummaryMetric({ label, value, hint, tone }: {
   label: string;
   value: React.ReactNode;
   hint?: React.ReactNode;
   tone: "gain" | "loss" | "info" | "neutral" | "muted";
 }) {
-  const accent = {
-    gain: "before:bg-gain-500",
-    loss: "before:bg-loss-500",
-    info: "before:bg-gold-500",
-    neutral: "before:bg-ink-300",
-    muted: "before:bg-ink-200"
-  }[tone];
   const valueColor = {
-    gain: "text-gain-700",
-    loss: "text-loss-700",
-    info: "text-ink-900",
-    neutral: "text-ink-800",
-    muted: "text-ink-400"
-  }[tone];
-  const iconColor = {
-    gain: "text-gain-600",
-    loss: "text-loss-600",
-    info: "text-gold-500",
-    neutral: "text-ink-400",
-    muted: "text-ink-300"
+    gain: "text-gain-700", loss: "text-loss-700", info: "text-ink-900",
+    neutral: "text-ink-900", muted: "text-ink-400"
   }[tone];
   return (
-    <div
-      className={`relative overflow-hidden rounded-md border border-hair bg-canvas-sunk/50 px-3.5 py-3 before:absolute before:left-0 before:top-0 before:h-full before:w-[3px] before:rounded-l-md ${accent}`}
-    >
-      <div className="flex items-center gap-1.5">
-        <span className={iconColor}>{icon}</span>
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">
-          {label}
-        </span>
-      </div>
-      <div className={`mt-1.5 text-[18px] font-bold leading-none tabular ${valueColor}`}>
-        {value}
-      </div>
-      {hint && (
-        <div className="mt-1.5 text-[11px] leading-tight text-ink-500">{hint}</div>
-      )}
+    <div className="summary-metric">
+      <h3 className="net-worth-label">{label}</h3>
+      <div className={`net-worth-metric-value tabular ${valueColor}`}>{value}</div>
+      {hint && <div className="net-worth-note">{hint}</div>}
     </div>
   );
 }
 
-function NativeTotalChip({
-  code,
-  value,
-  count
-}: {
-  code: string;
-  value: number;
-  count: number;
-}) {
+function NativeTotalMetric({ code, value, count }: { code: string; value: number; count: number }) {
   const labels: Record<string, string> = { CNY: "人民币", USD: "美元", HKD: "港元" };
-  const empty = count === 0;
   return (
-    <div
-      className={`flex items-baseline gap-2 rounded-md border px-2.5 py-1.5 text-[12px] ${
-        empty
-          ? "border-hair/60 bg-canvas-sunk/40 text-ink-400"
-          : "border-hair bg-canvas-sunk/70"
-      }`}
-    >
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">
-        {code}
-      </span>
-      <span className={`tabular font-medium ${empty ? "text-ink-400" : "text-ink-900"}`}>
-        {formatMoney(value, code, 2)}
-      </span>
-      <span className="text-[10px] text-ink-400">
-        {labels[code] ?? code} · {count} 笔
-      </span>
+    <div className="summary-metric">
+      <h3 className="net-worth-label">{labels[code] ?? code}<span className="ml-2 text-[11px] text-ink-400">{code}</span></h3>
+      <div className={`summary-native-value tabular ${count === 0 ? "text-ink-400" : "text-ink-900"}`}>{formatMoney(value, code, 2)}</div>
+      <div className="net-worth-note">原币 · {count} 笔</div>
     </div>
   );
 }
 
-function AllocationStat({
-  label,
-  value,
-  total,
-  currency,
-  hint
-}: {
-  label: string;
-  value: number;
-  total: number;
-  currency: string;
-  hint?: string;
-}) {
-  const pct = total ? value / total : 0;
-  return (
-    <span className="inline-flex items-baseline gap-1.5 rounded-md border border-hair bg-canvas-sunk/70 px-2 py-1">
-      <span className="text-ink-400">{label}</span>
-      <span className="tabular font-medium text-ink-900">
-        {formatMoney(value, currency, 0)}
-      </span>
-      <span className="tabular text-ink-500">{formatPercent(pct, 1)}</span>
-      {hint && <span className="text-ink-400">· {hint}</span>}
-    </span>
-  );
-}
-
-/**
- * "最近变动"单行内容（用于 Hero 底部跑马灯 / 单条静态展示）。
- * 抽离的目的：在 marquee 渲染两份相同 list 时复用同一份 DOM 描述。
- */
+/** 最近变动列表项。 */
 function RecentChangeRow({
   c
 }: {
@@ -769,7 +445,7 @@ function OnboardingBanner({ accountCount }: { accountCount: number }) {
           <div className="text-[15px] font-semibold text-ink-900">
             开始记录你的第一笔资产
           </div>
-          <div className="mt-1 text-[13px] text-ink-500">
+          <div className="mt-1 text-[14px] text-ink-500">
             {accountCount === 0
               ? "请先到「资产」页创建一个账户（例如：工行活期），再添加资产。"
               : "系统已自动初始化 6 个大类，现在可以添加第一笔资产了。"}

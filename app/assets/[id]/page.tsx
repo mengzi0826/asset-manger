@@ -1,3 +1,5 @@
+import { PageHeader } from "@/components/PageHeader";
+import { OperationSheet } from "@/components/ui/OperationSheet";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { notFound } from "next/navigation";
@@ -47,20 +49,13 @@ export default async function EditAssetPage({
   return (
     <div className="space-y-5">
       <div>
-        <Link href={listHref} className="inline-flex items-center gap-1 text-[12px] text-ink-400 hover:text-ink-800">
+        <Link href={listHref} className="inline-flex items-center gap-1 text-[13px] text-ink-400 hover:text-ink-800">
           <ArrowLeft className="h-3 w-3" /> 返回资产
         </Link>
-        <div className="mt-2">
-          <div className="eyebrow">编辑资产</div>
-          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900">
-            {asset.name}
-          </h1>
-          <p className="mt-0.5 text-[13px] text-ink-500">
-            保存后会自动记录一条字段级变动日志
-          </p>
-        </div>
+        <div className="mt-4"><PageHeader title={asset.name} /></div>
       </div>
       {isSecurity && (
+        <OperationSheet title="证券交易" description="记录增持、减持、分红或清仓，查看份额与现金变化。" action="记录交易">
         <TradeDialog
           assetId={asset.id}
           assetName={asset.name}
@@ -70,8 +65,10 @@ export default async function EditAssetPage({
           currentPrice={asset.current_price}
           cashAssets={cashAssets}
         />
+        </OperationSheet>
       )}
       {isCash && (
+        <OperationSheet title="现金收支" description="记录入金与消费，回看近期现金流。" action="记录收支">
         <CashFlowPanel
           assetId={asset.id}
           assetName={asset.name}
@@ -79,6 +76,7 @@ export default async function EditAssetPage({
           currentAmount={asset.amount ?? 0}
           entries={listCashFlowEntries(asset.id)}
         />
+        </OperationSheet>
       )}
       <AssetForm
         mode="edit"

@@ -7,7 +7,7 @@ import type { NetWorthChange } from "@/lib/netWorthChange";
 import { formatMoney, formatPercent } from "@/lib/utils";
 import { NetWorthBreakdown } from "@/components/NetWorthBreakdown";
 
-export function NetWorthDelta({ change, currency }: { change: NetWorthChange; currency: string }) {
+export function NetWorthDelta({ change, currency, variant = "chip" }: { change: NetWorthChange; currency: string; variant?: "chip" | "plain" }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0, width: 340, maxHeight: 480 });
   const trigger = useRef<HTMLButtonElement>(null);
@@ -30,7 +30,7 @@ export function NetWorthDelta({ change, currency }: { change: NetWorthChange; cu
     const place = () => {
       const anchor = trigger.current?.getBoundingClientRect();
       if (!anchor) return;
-      // 页面在 globals.css 中使用 CSS zoom，DOM 坐标已缩放，fixed 样式需还原到布局像素。
+      // 兼容用户自行设置的 CSS zoom；默认布局不再整体缩放。
       const zoom = (Number.parseFloat(getComputedStyle(document.documentElement).zoom) || 1) *
         (Number.parseFloat(getComputedStyle(document.body).zoom) || 1);
       const width = Math.min(340, (window.innerWidth - 24) / zoom);
@@ -72,7 +72,7 @@ export function NetWorthDelta({ change, currency }: { change: NetWorthChange; cu
     <button
       ref={trigger}
       type="button"
-      className={`chip tabular cursor-help ${value != null && value !== 0 ? value > 0 ? "chip-gain" : "chip-loss" : ""}`}
+      className={`tabular cursor-help ${variant === "plain" ? `net-worth-delta ${value != null && value !== 0 ? value > 0 ? "text-gain-700" : "text-loss-700" : "text-ink-600"}` : `chip ${value != null && value !== 0 ? value > 0 ? "chip-gain" : "chip-loss" : ""}`}`}
       aria-label={`${change.comparison}，${value == null ? "暂无对比数据" : formatMoney(value, currency)}，查看净值变化明细`}
       aria-describedby={open ? id : undefined}
       onMouseEnter={show}
@@ -81,10 +81,15 @@ export function NetWorthDelta({ change, currency }: { change: NetWorthChange; cu
       onBlur={() => setOpen(false)}
       onClick={show}
     >
-      {value != null && value !== 0 && (value > 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />)}
-      {value != null && change.percent != null && <><span className="font-semibold">{formatPercent(change.percent)}</span><span className="opacity-60">·</span></>}
-      {value != null && <span>{value > 0 ? "+" : ""}{formatMoney(value, currency)}</span>}
-      <span className="opacity-60">{change.comparison}</span>
+      {variant === "plain" ? <>
+        <span className="text-[12px] font-normal text-ink-400">{change.comparison}</span>
+        {value != null && <span className="font-semibold">{value > 0 ? "+" : ""}{formatMoney(value, currency)}</span>}
+      </> : <>
+        {value != null && value !== 0 && (value > 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />)}
+        {value != null && change.percent != null && <><span className="font-semibold">{formatPercent(change.percent)}</span><span className="opacity-60">·</span></>}
+        {value != null && <span>{value > 0 ? "+" : ""}{formatMoney(value, currency)}</span>}
+        <span className="opacity-60">{change.comparison}</span>
+      </>}
     </button>
     {open && createPortal(
       <div
@@ -96,10 +101,10 @@ export function NetWorthDelta({ change, currency }: { change: NetWorthChange; cu
         onMouseEnter={show}
         onMouseLeave={hideSoon}
       >
-        <div className="text-[12px] font-semibold text-ink-800">净值变化明细</div>
-        {change.from && <div className="tabular text-[11px] text-ink-400">{change.from} → {change.to} · {currency}</div>}
+        <div className="text-[13px] font-semibold text-ink-800">净值变化明细</div>
+        {change.from && <div className="tabular text-[12px] text-ink-400">{change.from} → {change.to} · {currency}</div>}
         <NetWorthBreakdown change={change} currency={currency} compact />
-        {change.total != null && <p className="text-[11px] leading-relaxed text-ink-400">
+        {change.total != null && <p className="text-[12px] leading-relaxed text-ink-400">
           汇率影响按两端平均外币金额折算。
         </p>}
       </div>, document.body

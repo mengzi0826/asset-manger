@@ -1,5 +1,9 @@
 "use client";
 
+import { cloneElement, isValidElement, useId } from "react";
+
+import { useConfirm } from "@/components/ui/ConfirmProvider";
+
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { AlertTriangle, ArrowLeft, Loader2, Save, Search, Trash2 } from "lucide-react";
@@ -92,7 +96,10 @@ export function AssetForm({
   returnCat?: string;
 }) {
   const router = useRouter();
-  const [pending, start] = useTransition();
+  const confirmAction = useConfirm();
+  const [refreshing, start] = useTransition();
+  const [working, setWorking] = useState(false);
+  const pending = refreshing || working;
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(() =>
     rowToForm(initial, defaultAccountId ?? accounts[0]?.id ?? 0)
@@ -171,77 +178,98 @@ export function AssetForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
-    if (!form.account_id) {
-      setError("请先创建一个账户（小类）");
-      return;
-    }
-    if (showCashDeduct && selectedCash) {
-      if (form.unit_cost === "") {
-        setError("勾选扣款账户时需要填写买入均价");
+    if (pending) return;
+    setWorking(true);
+    try {
+      setError(null);
+      if (!form.account_id) {
+        setError("请先创建一个账户（小类）");
         return;
       }
-      if (cashInsufficient) {
-        setError("现金余额不足");
-        return;
+      if (showCashDeduct && selectedCash) {
+        if (form.unit_cost === "") {
+          setError("勾选扣款账户时需要填写买入均价");
+          return;
+        }
+        if (cashInsufficient) {
+          setError("现金余额不足");
+          return;
+        }
       }
-    }
-    const payload: Record<string, any> = {
-      account_id: form.account_id,
-      name: form.name.trim(),
-      symbol: code === "securities" && form.symbol.trim() ? form.symbol.trim().toUpperCase() : null,
-      currency: form.currency,
-      quantity: form.quantity === "" ? 1 : Number(form.quantity),
-      unit_cost: form.unit_cost === "" ? null : Number(form.unit_cost),
-      current_price: form.current_price === "" ? null : Number(form.current_price),
-      amount: form.amount === "" ? null : Number(form.amount),
-      annual_rate: form.annual_rate === "" ? null : Number(form.annual_rate),
-      start_date: form.start_date || null,
-      maturity_date: form.maturity_date || null,
-      notes: form.notes || null
-    };
-    if (showCashDeduct && cashAssetId !== "") {
-      payload.cash_asset_id = Number(cashAssetId);
-    }
+      const payload: Record<string, any> = {
+        account_id: form.account_id,
+        name: form.name.trim(),
+        symbol: code === "securities" && form.symbol.trim() ? form.symbol.trim().toUpperCase() : null,
+        currency: form.currency,
+        quantity: form.quantity === "" ? 1 : Number(form.quantity),
+        unit_cost: form.unit_cost === "" ? null : Number(form.unit_cost),
+        current_price: form.current_price === "" ? null : Number(form.current_price),
+        amount: form.amount === "" ? null : Number(form.amount),
+        annual_rate: form.annual_rate === "" ? null : Number(form.annual_rate),
+        start_date: form.start_date || null,
+        maturity_date: form.maturity_date || null,
+        notes: form.notes || null
+      };
+      if (showCashDeduct && cashAssetId !== "") {
+        payload.cash_asset_id = Number(cashAssetId);
+      }
 
-    const url = mode === "create" ? "/api/assets" : `/api/assets/${initial!.id}`;
-    const method = mode === "create" ? "POST" : "PATCH";
-    const res = await fetch(url, {
-      method,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      setError(j.error ?? "保存失败");
-      return;
+      const url = mode === "create" ? "/api/assets" : `/api/assets/${initial!.id}`;
+      const method = mode === "create" ? "POST" : "PATCH";
+      const res = await fetch(url, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error ?? "保存失败");
+        return;
+      }
+      const href = assetsListHref(returnCat, code);
+      start(() => {
+        router.push(href);
+        router.refresh();
+      });
+    } catch {
+      setError("保存失败，请检查连接后重试");
+    } finally {
+      setWorking(false);
     }
-    const href = assetsListHref(returnCat, code);
-    start(() => {
-      router.push(href);
-      router.refresh();
-    });
   }
 
   async function remove() {
-    if (!initial) return;
-    if (!confirm(`确定删除「${initial.name}」？`)) return;
-    await fetch(`/api/assets/${initial.id}`, { method: "DELETE" });
-    const initialAccount = accounts.find((a) => a.id === initial.account_id);
-    const initialCategory = initialAccount
-      ? categories.find((c) => c.id === initialAccount.category_id)
-      : null;
-    const href = assetsListHref(returnCat, initialCategory?.code);
-    start(() => {
-      router.push(href);
-      router.refresh();
-    });
+    if (pending) return;
+    setWorking(true);
+    try {
+      if (!initial) return;
+      if (!await confirmAction(`确定删除「${initial.name}」？`)) return;
+      const res = await fetch(`/api/assets/${initial.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body.error ?? "删除失败");
+        return;
+      }
+      const initialAccount = accounts.find((a) => a.id === initial.account_id);
+      const initialCategory = initialAccount
+        ? categories.find((c) => c.id === initialAccount.category_id)
+        : null;
+      const href = assetsListHref(returnCat, initialCategory?.code);
+      start(() => {
+        router.push(href);
+        router.refresh();
+      });
+    } catch {
+      setError("删除失败，请检查连接后重试");
+    } finally {
+      setWorking(false);
+    }
   }
 
   if (accounts.length === 0) {
     return (
       <div className="card">
-        <div className="card-body flex flex-col items-center gap-3 py-10 text-center text-[13px] text-ink-500">
+        <div className="card-body flex flex-col items-center gap-3 py-10 text-center text-[14px] text-ink-500">
           <AlertTriangle className="h-6 w-6 text-gold-500" />
           <div>
             <div className="text-[15px] font-semibold text-ink-900">还没有账户</div>
@@ -347,7 +375,7 @@ export function AssetForm({
       <div className="card">
         <div className="card-header">
           <div className="card-title">资产数据</div>
-          <span className="text-[11px] text-ink-400">按大类自动展示相关字段</span>
+          <span className="text-[12px] text-ink-400">按大类自动展示相关字段</span>
         </div>
         <div className="card-body">
           {showAmount && (
@@ -426,8 +454,8 @@ export function AssetForm({
               </Field>
               {selectedCash && (
                 <div className="flex items-end">
-                  <div className="text-[12px] tabular">
-                    <div className="text-[10px] uppercase tracking-wider text-ink-400">
+                  <div className="text-[13px] tabular">
+                    <div className="text-[11px] uppercase tracking-wider text-ink-400">
                       预计扣款 / 扣款后余额
                     </div>
                     <div
@@ -508,24 +536,24 @@ export function AssetForm({
       {error && (
         <div
           role="alert"
-          className="rounded-md border border-loss-100 bg-loss-50 px-3.5 py-2.5 text-[13px] text-loss-700"
+          className="rounded-md border border-gain-100 bg-gain-50 px-3.5 py-2.5 text-[14px] text-gain-700"
         >
           {error}
         </div>
       )}
 
       <div className="sticky bottom-4 z-10 flex items-center justify-between gap-2 rounded-lg border border-hair bg-canvas-raised p-3 shadow-pop">
-        <Link href="/assets" className="btn-ghost">
+        <Link href={assetsListHref(returnCat, code)} className="btn-ghost">
           <ArrowLeft className="h-3.5 w-3.5" /> 返回
         </Link>
         <div className="flex items-center gap-2">
           {mode === "edit" && (
-            <button type="button" onClick={remove} className="btn-danger">
+            <button type="button" onClick={remove} disabled={pending} className="btn-danger">
               <Trash2 className="h-3.5 w-3.5" /> 删除
             </button>
           )}
           <button className="btn-primary" disabled={pending}>
-            <Save className="h-3.5 w-3.5" /> {mode === "edit" ? "保存修改" : "创建资产"}
+            <Save className="h-3.5 w-3.5" /> {pending ? "正在保存…" : mode === "edit" ? "保存修改" : "创建资产"}
           </button>
         </div>
       </div>
@@ -544,14 +572,17 @@ function Field({
   required?: boolean;
   hint?: string;
 }) {
+  const id = useId();
+  const control = isValidElement<{ id?: string; "aria-describedby"?: string }>(children) ? children : null;
+  const controlId = control?.props.id ?? id;
   return (
     <div>
-      <label className="label">
+      <label className="label" htmlFor={controlId}>
         {label}
-        {required && <span className="ml-1 text-loss-600">*</span>}
+        {required && <span className="ml-1 text-gain-700">*</span>}
       </label>
-      {children}
-      {hint && <p className="mt-1 text-[11px] text-ink-400">{hint}</p>}
+      {control ? cloneElement(control, { id: controlId, "aria-describedby": hint ? `${id}-hint` : control.props["aria-describedby"] }) : children}
+      {hint && <p id={`${id}-hint`} className="mt-1 text-[12px] text-ink-400">{hint}</p>}
     </div>
   );
 }
@@ -635,7 +666,7 @@ function SecurityLookup({
       {open && (items.length > 0 || err) && (
         <div className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-md border border-hair bg-canvas-raised shadow-pop">
           {err && items.length === 0 && (
-            <div className="px-3 py-2 text-[12px] text-ink-400">
+            <div className="px-3 py-2 text-[13px] text-ink-400">
               搜索失败：{err}，请稍后重试或直接手动输入代码
             </div>
           )}
@@ -652,22 +683,22 @@ function SecurityLookup({
               }}
             >
               <span className="flex min-w-0 flex-col">
-                <span className="truncate text-[13px] font-medium text-ink-900">
+                <span className="truncate text-[14px] font-medium text-ink-900">
                   {it.name}
                 </span>
-                <span className="mt-0.5 truncate text-[11px] text-ink-400">
+                <span className="mt-0.5 truncate text-[12px] text-ink-400">
                   {it.typeName || it.exchange}
                 </span>
               </span>
               <span className="flex shrink-0 items-center gap-2">
-                <span className="tabular text-[12px] text-ink-700">{it.code}</span>
+                <span className="tabular text-[13px] text-ink-700">{it.code}</span>
                 <span className="chip tabular">{it.currency}</span>
               </span>
             </button>
           ))}
         </div>
       )}
-      <p className="mt-1 text-[11px] text-ink-400">
+      <p className="mt-1 text-[12px] text-ink-400">
         选中后会自动填写 资产名称 / 股票代码 / 计价货币；数据来源：东方财富
       </p>
     </div>

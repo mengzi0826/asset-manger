@@ -46,8 +46,8 @@ function warningsOf(props: DataFreshnessProps): string[] {
   return warnings;
 }
 
-/** 总览 Hero 底部：汇率 / 股价时间戳 */
-export function DataFreshnessLine(props: DataFreshnessProps) {
+/** 全站底栏：汇率 / 股价时间戳 */
+export function DataFreshnessLine(props: Omit<DataFreshnessProps, "hasSecurities">) {
   const {
     weekend,
     fxConfigured,
@@ -60,17 +60,15 @@ export function DataFreshnessLine(props: DataFreshnessProps) {
     stocksStale
   } = props;
   return (
-    <>
-      <span aria-hidden="true">·</span>
+    <div className="market-freshness">
       <span>
-        汇率{" "}
+        汇率更新{" "}
         <span className={`tabular ${fxError || fxStale ? "text-gold-700" : "text-ink-600"}`}>
           {!fxConfigured ? "未配置" : stamp(fxLast)}
         </span>
       </span>
-      <span aria-hidden="true">·</span>
       <span>
-        股价{" "}
+        股价更新{" "}
         <span
           className={`tabular ${stocksError || (stocksStale && !weekend) ? "text-gold-700" : "text-ink-600"}`}
         >
@@ -78,12 +76,9 @@ export function DataFreshnessLine(props: DataFreshnessProps) {
         </span>
       </span>
       {weekend && (
-        <>
-          <span aria-hidden="true">·</span>
-          <span>休市</span>
-        </>
+        <span>周末休市</span>
       )}
-    </>
+    </div>
   );
 }
 
@@ -92,13 +87,13 @@ export function DataFreshnessBanner(props: DataFreshnessProps) {
   const warnings = warningsOf(props);
   if (warnings.length === 0) return null;
   return (
-    <div className="flex items-start gap-2 rounded-md border border-gold-200 bg-gold-100 px-4 py-3 text-[13px] text-gold-700">
+    <div className="flex items-start gap-2 rounded-md border border-gold-200 bg-gold-100 px-4 py-3 text-[14px] text-gold-700">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       <div className="min-w-0 space-y-0.5">
         {warnings.map((w) => (
           <div key={w}>{w}</div>
         ))}
-        <Link href="/settings" className="text-[12px] font-medium text-gold-700 hover:text-gold-600">
+        <Link href="/settings" className="text-[13px] font-medium text-gold-700 hover:text-gold-600">
           去设置查看或手动刷新
         </Link>
       </div>

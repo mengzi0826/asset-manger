@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import Link from "next/link";
 import { ExternalLink, Plus, TrendingUp } from "lucide-react";
 import { getSetting } from "@/lib/db";
@@ -147,20 +148,7 @@ export default async function SecuritiesPage() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-[22px] font-bold tracking-tight text-ink-900">证券</h1>
-          <p className="mt-0.5 text-[13px] text-ink-500">
-            股票 / ETF / LOF · 实时价格 + 历史走势
-          </p>
-        </div>
-        <Link
-          href="/assets/new?cat=securities"
-          className="btn-primary"
-        >
-          <Plus className="h-3.5 w-3.5" /> 新增持仓
-        </Link>
-      </div>
+      <PageHeader title="证券" actions={<Link href="/assets/new?cat=securities" className="btn-primary"><Plus className="h-4 w-4" />新增持仓</Link>} />
 
       {!hasPositions ? (
         <div className="card">
@@ -168,11 +156,11 @@ export default async function SecuritiesPage() {
             <TrendingUp className="h-8 w-8 text-ink-300" />
             <div>
               <div className="text-[15px] font-semibold text-ink-900">还没有证券持仓</div>
-              <div className="mt-1 text-[13px] text-ink-500">
+              <div className="mt-1 text-[14px] text-ink-500">
                 在「资产」页为证券类账户添加资产，或直接点击上方新增按钮
               </div>
               {todayPnL.closedPositionCount > 0 && (
-                <div className="mt-3 text-[13px] text-ink-600">
+                <div className="mt-3 text-[14px] text-ink-600">
                   今日已移除持仓的行情影响：{hasTodayQuotes ? formatMoney(todayPnLValue, baseCurrency) : "—"}
                   {todayPnL.status === "partial" ? "（部分覆盖）" : ""}
                 </div>
@@ -186,7 +174,7 @@ export default async function SecuritiesPage() {
       ) : (
         <>
           {/* KPI 汇总 */}
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
             <KpiCard
               label="证券总市值"
               value={formatMoney(totalValue, baseCurrency, 0)}
@@ -237,7 +225,7 @@ export default async function SecuritiesPage() {
             <TrendCard data={panelData} currency={baseCurrency} />
             <PnLCard data={panelData} currency={baseCurrency} />
           </div>
-          <p className="text-[11px] text-ink-400">
+          <p className="text-[12px] text-ink-400">
             浮盈以手填券商均价为准；分红可能已反映在均价中，请勿重复加总。费用是否已包含取决于录入成本。
             盈亏曲线按当前持仓回算，不含已清仓持仓，不代表真实历史投资收益。
           </p>
@@ -248,7 +236,7 @@ export default async function SecuritiesPage() {
               <div className="card-title">持仓明细</div>
               <Link
                 href="/assets"
-                className="inline-flex items-center gap-1 text-[11px] text-ink-500 hover:text-gold-500"
+                className="inline-flex items-center gap-1 text-[12px] text-ink-500 hover:text-gold-500"
               >
                 编辑
                 <ExternalLink className="h-3 w-3" />
@@ -288,14 +276,14 @@ function KpiCard({
   return (
     <div className="card">
       <div className="card-body py-4">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-400">
+        <div className="text-[12px] font-semibold uppercase tracking-wider text-ink-400">
           {label}
         </div>
         <div className={`mt-1.5 text-[20px] font-bold tabular leading-none ${colored}`}>
           {value}
         </div>
         {sub && (
-          <div className="mt-1 text-[11px] text-ink-400">{sub}</div>
+          <div className="mt-1 text-[12px] text-ink-400">{sub}</div>
         )}
       </div>
     </div>

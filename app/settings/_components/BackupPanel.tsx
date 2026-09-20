@@ -42,12 +42,12 @@ export function BackupPanel() {
       <div className="card-header">
         <div className="card-title">备份与恢复</div>
       </div>
-      <div className="card-body space-y-4 text-[13px]">
-        <div className="flex items-start gap-3 rounded-md border border-hair bg-canvas-sunk/50 p-3 text-[12px] text-ink-500">
+      <div className="card-body space-y-4 text-[14px]">
+        <div className="flex items-start gap-3 rounded-md border border-hair bg-canvas-sunk/50 p-3 text-[13px] text-ink-500">
           <Database className="mt-0.5 h-4 w-4 shrink-0 text-ink-400" />
           <div>
             数据库位置：
-            <code className="tabular mx-1 rounded border border-hair bg-canvas-raised px-1.5 py-0.5 text-[11px] text-ink-700">
+            <code className="tabular mx-1 rounded border border-hair bg-canvas-raised px-1.5 py-0.5 text-[12px] text-ink-700">
               ./data/assets.db
             </code>
             。建议定期导出 JSON 备份（含证券日线，恢复后走势图可接上）。覆盖导入会清空资产、快照、日线与刷新日志后再写入。
@@ -97,10 +97,10 @@ export function BackupPanel() {
         {msg && (
           <div
             role={msg.tone === "error" ? "alert" : "status"}
-            className={`rounded-md border px-3 py-2 text-[12px] ${
+            className={`rounded-md border px-3 py-2 text-[13px] ${
               msg.tone === "error"
-                ? "border-loss-100 bg-loss-50 text-loss-700"
-                : "border-gain-100 bg-gain-50 text-gain-700"
+                ? "border-gain-100 bg-gain-50 text-gain-700"
+                : "border-loss-100 bg-loss-50 text-loss-700"
             }`}
           >
             {msg.text}

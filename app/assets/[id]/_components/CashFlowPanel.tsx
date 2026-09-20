@@ -1,5 +1,7 @@
 "use client";
 
+import { cloneElement, isValidElement, useId } from "react";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDownLeft, ArrowUpRight, Loader2 } from "lucide-react";
@@ -68,7 +70,7 @@ export function CashFlowPanel({
       <div className="card-header">
         <div>
           <div className="card-title">现金流（入金 / 消费）</div>
-          <p className="mt-1 text-[11px] text-ink-400">记录金额和原因，便于日后复盘余额变化</p>
+          <p className="mt-1 text-[12px] text-ink-400">记录金额和原因，便于日后复盘余额变化</p>
         </div>
         <span className="chip tabular">当前 {formatMoney(currentAmount, currency, 2)}</span>
       </div>
@@ -81,7 +83,7 @@ export function CashFlowPanel({
                 setType("deposit");
                 setError(null);
               }}
-              className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[13px] font-medium transition ${
+              className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[14px] font-medium transition ${
                 type === "deposit" ? "bg-gain-50 text-gain-700" : "text-ink-500 hover:text-ink-800"
               }`}
             >
@@ -93,7 +95,7 @@ export function CashFlowPanel({
                 setType("expense");
                 setError(null);
               }}
-              className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[13px] font-medium transition ${
+              className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[14px] font-medium transition ${
                 type === "expense" ? "bg-loss-50 text-loss-700" : "text-ink-500 hover:text-ink-800"
               }`}
             >
@@ -125,7 +127,7 @@ export function CashFlowPanel({
             </Field>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-hair bg-canvas-inset px-3.5 py-3 text-[12px]">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-hair bg-canvas-inset px-3.5 py-3 text-[13px]">
             <div className="tabular text-ink-600">
               操作后余额：{" "}
               <span className={insufficient ? "font-medium text-loss-700" : "font-medium text-ink-900"}>
@@ -142,7 +144,7 @@ export function CashFlowPanel({
           </div>
 
           {error && (
-            <div role="alert" className="rounded-md border border-loss-100 bg-loss-50 px-3.5 py-2.5 text-[13px] text-loss-700">
+            <div role="alert" className="rounded-md border border-gain-100 bg-gain-50 px-3.5 py-2.5 text-[14px] text-gain-700">
               {error}
             </div>
           )}
@@ -150,11 +152,11 @@ export function CashFlowPanel({
 
         <div className="border-t border-hair pt-4">
           <div className="mb-2.5 flex items-center justify-between gap-3">
-            <div className="text-[12px] font-medium text-ink-700">最近现金流</div>
-            <span className="text-[11px] text-ink-400">{entries.length} 条</span>
+            <div className="text-[13px] font-medium text-ink-700">最近现金流</div>
+            <span className="text-[12px] text-ink-400">{entries.length} 条</span>
           </div>
           {entries.length === 0 ? (
-            <div className="rounded-md bg-canvas-sunk/60 px-3 py-5 text-center text-[12px] text-ink-400">
+            <div className="rounded-md bg-canvas-sunk/60 px-3 py-5 text-center text-[13px] text-ink-400">
               暂无入金或消费记录
             </div>
           ) : (
@@ -162,7 +164,7 @@ export function CashFlowPanel({
               {entries.map((entry) => {
                 const isDeposit = entry.type === "deposit";
                 return (
-                  <li key={entry.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-[12px]">
+                  <li key={entry.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-[13px]">
                     <span className={isDeposit ? "chip chip-gain" : "chip chip-loss"}>
                       {isDeposit ? "入金" : "消费"}
                     </span>
@@ -170,7 +172,7 @@ export function CashFlowPanel({
                     <span className={`tabular font-medium ${isDeposit ? "text-gain-700" : "text-loss-700"}`}>
                       {isDeposit ? "+" : "-"}{formatMoney(Math.abs(entry.amount), currency, 2)}
                     </span>
-                    <span className="tabular basis-full text-right text-[11px] text-ink-400 sm:basis-auto">
+                    <span className="tabular basis-full text-right text-[12px] text-ink-400 sm:basis-auto">
                       {formatCnDateTime(entry.createdAt)}
                     </span>
                   </li>
@@ -195,14 +197,17 @@ function Field({
   required?: boolean;
   hint?: string;
 }) {
+  const id = useId();
+  const control = isValidElement<{ id?: string; "aria-describedby"?: string }>(children) ? children : null;
+  const controlId = control?.props.id ?? id;
   return (
     <div>
-      <label className="label">
+      <label className="label" htmlFor={controlId}>
         {label}
-        {required && <span className="ml-1 text-loss-600">*</span>}
+        {required && <span className="ml-1 text-gain-700">*</span>}
       </label>
-      {children}
-      {hint && <p className="mt-1 text-[11px] text-ink-400">{hint}</p>}
+      {control ? cloneElement(control, { id: controlId, "aria-describedby": hint ? `${id}-hint` : control.props["aria-describedby"] }) : children}
+      {hint && <p id={`${id}-hint`} className="mt-1 text-[12px] text-ink-400">{hint}</p>}
     </div>
   );
 }

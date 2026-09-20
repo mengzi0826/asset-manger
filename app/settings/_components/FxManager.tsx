@@ -56,7 +56,7 @@ export function FxManager({ rates, supported }: { rates: FxRate[]; supported: st
         </button>
       </div>
       <div className="card-body space-y-5">
-        <p className="text-[12px] leading-relaxed text-ink-500">
+        <p className="text-[13px] leading-relaxed text-ink-500">
           每 <span className="font-medium text-ink-700">8 小时</span> 自动从聚合数据拉取一次。下表「手动保存」的汇率以「手动」来源为准。
         </p>
         <form
@@ -112,11 +112,11 @@ export function FxManager({ rates, supported }: { rates: FxRate[]; supported: st
         {msg && (
           <div
             role={msg.tone === "error" ? "alert" : "status"}
-            className={`rounded-md border px-3 py-2 text-[12px] ${
+            className={`rounded-md border px-3 py-2 text-[13px] ${
               msg.tone === "error"
-                ? "border-loss-100 bg-loss-50 text-loss-700"
+                ? "border-gain-100 bg-gain-50 text-gain-700"
                 : msg.tone === "success"
-                  ? "border-gain-100 bg-gain-50 text-gain-700"
+                  ? "border-loss-100 bg-loss-50 text-loss-700"
                   : "border-hair bg-canvas-sunk text-ink-500"
             }`}
           >
@@ -160,7 +160,7 @@ export function FxManager({ rates, supported }: { rates: FxRate[]; supported: st
                         {r.source === "manual" ? "手动" : "自动"}
                       </span>
                     </td>
-                    <td className="tabular text-[11px] text-ink-400">
+                    <td className="tabular text-[12px] text-ink-400">
                       {formatCnDateTime(r.fetched_at)}
                     </td>
                   </tr>

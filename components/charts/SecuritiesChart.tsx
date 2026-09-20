@@ -36,15 +36,16 @@ function filterByRange<T extends { date: string }>(data: T[], days: number | nul
 
 function RangeSelector({ value, onChange }: { value: RangeKey; onChange: (r: RangeKey) => void }) {
   return (
-    <div className="flex items-center gap-0.5">
+    <div className="segmented">
       {RANGE_OPTIONS.map(({ key, label }) => (
         <button
           key={key}
           type="button"
           onClick={() => onChange(key)}
-          className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+          aria-pressed={value === key}
+          className={`segmented-item ${
             value === key
-              ? "bg-gold-500 text-canvas"
+              ? "segmented-item-active"
               : "text-ink-400 hover:text-ink-700"
           }`}
         >
@@ -114,10 +115,10 @@ export interface SecuritiesPanelData {
 function usePalette(isDark: boolean) {
   return isDark
     ? {
-        grid: "#1E293B",
-        axisLine: "#1E293B",
+        grid: "#2B3340",
+        axisLine: "#2B3340",
         tick: "#64748B",
-        tooltipBg: "#1E293B",
+        tooltipBg: "#2B3340",
         tooltipBorder: "#334155",
         tooltipText: "#F1F5F9",
         tooltipLabel: "#94A3B8",
@@ -126,15 +127,15 @@ function usePalette(isDark: boolean) {
         lossStroke: "#34D399",
         lossFill: "#34D399",
         neutralStroke: "#60A5FA",
-        activeDotStroke: "#0B1020",
-        barBg: "#1E293B"
+        activeDotStroke: "#1C212A",
+        barBg: "#2B3340"
       }
     : {
-        grid: "#E7E4D9",
-        axisLine: "#E7E4D9",
+        grid: "#E4E9F1",
+        axisLine: "#E4E9F1",
         tick: "#7A8699",
         tooltipBg: "#0F172A",
-        tooltipBorder: "#1E293B",
+        tooltipBorder: "#2B3340",
         tooltipText: "#F8FAFC",
         tooltipLabel: "#CBD5E1",
         gainStroke: "#DC2626",
@@ -180,7 +181,7 @@ function MiniSparkline({
   } else if (currentPrice != null) {
     pts = [{ v: currentPrice }];
   } else {
-    return <div className="h-8 w-14 opacity-30 text-[10px] text-ink-400 flex items-center">—</div>;
+    return <div className="h-8 w-14 opacity-30 text-[11px] text-ink-400 flex items-center">—</div>;
   }
 
   if (pts.length < 2) return <div className="h-8 w-14" />;
@@ -235,7 +236,7 @@ function TotalTrendChart({
   if (data.length < 2) {
     return (
       <div
-        className="flex items-center justify-center text-[11px] text-ink-400"
+        className="flex items-center justify-center text-[12px] text-ink-400"
         style={{ height: h }}
       >
         历史快照点不足，修改资产后将自动记录
@@ -261,17 +262,17 @@ function TotalTrendChart({
           <CartesianGrid strokeDasharray="2 4" stroke={pal.grid} vertical={false} />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 10, fill: pal.tick, fontFamily: "JetBrains Mono" }}
+            tick={{ fontSize: 12, fill: pal.tick, fontFamily: "inherit" }}
             tickLine={false}
             axisLine={{ stroke: pal.axisLine }}
             minTickGap={32}
           />
           <YAxis
-            tick={{ fontSize: 10, fill: pal.tick, fontFamily: "JetBrains Mono" }}
+            tick={{ fontSize: 12, fill: pal.tick, fontFamily: "inherit" }}
             tickFormatter={compact}
             tickLine={false}
             axisLine={false}
-            width={48}
+            width={70}
           />
           <ReferenceLine y={first} stroke={pal.grid} strokeDasharray="3 3" />
           <Tooltip
@@ -281,11 +282,11 @@ function TotalTrendChart({
               border: `1px solid ${pal.tooltipBorder}`,
               borderRadius: 6,
               padding: "6px 10px",
-              fontSize: 11,
+              fontSize: 12,
               color: pal.tooltipText,
               fontFamily: "JetBrains Mono, monospace"
             }}
-            labelStyle={{ color: pal.tooltipLabel, fontSize: 10 }}
+            labelStyle={{ color: pal.tooltipLabel, fontSize: 12 }}
             formatter={(v: number) => [`${compact(v)} ${currency}`, "证券市值"]}
           />
           <Area
@@ -322,7 +323,7 @@ function PnLTrendChart({
   if (data.length < 2) {
     return (
       <div
-        className="flex items-center justify-center text-[11px] text-ink-400"
+        className="flex items-center justify-center text-[12px] text-ink-400"
         style={{ height: h }}
       >
         暂无盈亏历史（需配置买入价，且当前价至少刷新过一次）
@@ -349,17 +350,17 @@ function PnLTrendChart({
           <CartesianGrid strokeDasharray="2 4" stroke={pal.grid} vertical={false} />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 10, fill: pal.tick, fontFamily: "JetBrains Mono" }}
+            tick={{ fontSize: 12, fill: pal.tick, fontFamily: "inherit" }}
             tickLine={false}
             axisLine={{ stroke: pal.axisLine }}
             minTickGap={32}
           />
           <YAxis
-            tick={{ fontSize: 10, fill: pal.tick, fontFamily: "JetBrains Mono" }}
+            tick={{ fontSize: 12, fill: pal.tick, fontFamily: "inherit" }}
             tickFormatter={(v) => (v >= 0 ? "+" : "") + compact(v)}
             tickLine={false}
             axisLine={false}
-            width={56}
+            width={76}
           />
           {/* 零轴基准线 */}
           <ReferenceLine y={0} stroke={pal.axisLine} strokeDasharray="3 3" strokeWidth={1.2} />
@@ -370,11 +371,11 @@ function PnLTrendChart({
               border: `1px solid ${pal.tooltipBorder}`,
               borderRadius: 6,
               padding: "6px 10px",
-              fontSize: 11,
+              fontSize: 12,
               color: pal.tooltipText,
               fontFamily: "JetBrains Mono, monospace"
             }}
-            labelStyle={{ color: pal.tooltipLabel, fontSize: 10 }}
+            labelStyle={{ color: pal.tooltipLabel, fontSize: 12 }}
             formatter={(v: number) => [
               `${v >= 0 ? "+" : ""}${v.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${currency}`,
               "浮动盈亏"
@@ -441,11 +442,11 @@ export function SecuritiesPanel({
     <div className="flex flex-col gap-4">
       {/* ── KPI 摘要（仅 all 模式） ── */}
       {showKpi && (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px]">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[13px]">
           <div className="flex items-baseline gap-1.5">
             <span className="text-ink-400">总市值</span>
             <span className="tabular font-semibold text-ink-900">{compact(totalValue)}</span>
-            <span className="text-[10px] text-ink-400">{currency}</span>
+            <span className="text-[11px] text-ink-400">{currency}</span>
           </div>
           <div className="flex items-baseline gap-1.5">
             <span className="text-ink-400">浮动盈亏</span>
@@ -461,7 +462,7 @@ export function SecuritiesPanel({
           <div className="flex items-baseline gap-1.5">
             <span className="text-ink-400">持仓</span>
             <span className="tabular font-medium text-ink-800">{positionCount}</span>
-            <span className="text-[10px] text-ink-400">
+            <span className="text-[11px] text-ink-400">
               只 ·{" "}
               {pnlPosCount > 0 && (
                 <span style={{ color: pal.gainStroke }}>↑{pnlPosCount}</span>
@@ -496,7 +497,7 @@ export function SecuritiesPanel({
 
       {/* ── 持仓明细列表（按市场分组） ── */}
       {showDetail && (
-        <MarketGroupedDetail positions={ranked} isDark={isDark} />
+        <div className="overflow-x-auto"><div className="min-w-[760px]"><MarketGroupedDetail positions={ranked} isDark={isDark} /></div></div>
       )}
     </div>
   );
@@ -566,7 +567,7 @@ export function PnLCard({
  * 用 CSS grid 保证多行间列对齐。
  */
 const ROW_GRID =
-  "grid grid-cols-[minmax(0,1fr)_72px_64px_72px_64px_72px_56px] items-center gap-2";
+  "grid grid-cols-[minmax(180px,1fr)_72px_64px_72px_64px_72px_56px] items-center gap-2";
 
 function PositionRow({ p, isDark }: { p: SecuritiesPosition; isDark: boolean }) {
   const totalUp = (p.pnlPct ?? 0) >= 0;
@@ -579,18 +580,18 @@ function PositionRow({ p, isDark }: { p: SecuritiesPosition; isDark: boolean }) 
     !has ? "text-ink-400" : up ? "text-gain-700" : "text-loss-700";
 
   return (
-    <div className={`${ROW_GRID} py-2 text-[12px] leading-tight`}>
+    <div className={`${ROW_GRID} py-2 text-[13px] leading-tight`}>
       {/* 名称 + 代码 + 币种 */}
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
           <span className="truncate font-medium text-ink-900">{p.name}</span>
           {p.symbol && (
-            <span className="shrink-0 rounded bg-canvas-sunk px-1 py-0.5 font-mono text-[10px] tabular text-ink-500">
+            <span className="shrink-0 rounded bg-canvas-sunk px-1 py-0.5 font-mono text-[11px] tabular text-ink-500">
               {p.symbol}
             </span>
           )}
         </div>
-        <div className="mt-0.5 text-[10px] text-ink-400">{p.currency}</div>
+        <div className="mt-0.5 text-[11px] text-ink-400">{p.currency}</div>
       </div>
 
       {/* 市值 */}
@@ -635,7 +636,7 @@ function PositionRow({ p, isDark }: { p: SecuritiesPosition; isDark: boolean }) 
 function PositionHeaderRow() {
   return (
     <div
-      className={`${ROW_GRID} pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-ink-400`}
+      className={`${ROW_GRID} pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-400`}
     >
       <div>名称</div>
       <div className="text-right">市值</div>
@@ -688,16 +689,16 @@ function MarketGroupedDetail({
           <div key={m}>
             {/* 市场标题行 */}
             <div className="mb-0.5 flex items-center gap-2 border-t border-hair pt-2">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">
                 {m}
               </span>
-              <span className="text-[10px] text-ink-300">{list.length} 只</span>
-              <span className="text-[10px] tabular text-ink-400">
+              <span className="text-[11px] text-ink-300">{list.length} 只</span>
+              <span className="text-[11px] tabular text-ink-400">
                 {sessionDate
                   ? `${m === "美股" ? "最近交易日" : "交易日"} ${sessionDate}`
                   : "暂无会话日"}
               </span>
-              <span className="ml-auto flex items-baseline gap-3 text-[10px]">
+              <span className="ml-auto flex items-baseline gap-3 text-[11px]">
                 <span className="text-ink-400">
                   当日{" "}
                   {todayBaseSum == null ? (

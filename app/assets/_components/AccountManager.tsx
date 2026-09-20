@@ -1,5 +1,7 @@
 "use client";
 
+import { useConfirm } from "@/components/ui/ConfirmProvider";
+
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
@@ -23,6 +25,7 @@ export function AccountManager({
   accounts: Account[];
 }) {
   const router = useRouter();
+  const confirmAction = useConfirm();
   const [expanded, setExpanded] = useState(accounts.length === 0);
   const [form, setForm] = useState({
     category_id: categories[0]?.id ?? 0,
@@ -31,29 +34,52 @@ export function AccountManager({
     notes: ""
   });
   const [error, setError] = useState<string | null>(null);
-  const [pending, start] = useTransition();
+  const [refreshing, start] = useTransition();
+  const [working, setWorking] = useState(false);
+  const pending = refreshing || working;
 
   async function createAccount(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
-    const res = await fetch("/api/accounts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(form)
-    });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      setError(j.error ?? "创建失败");
-      return;
+    if (pending) return;
+    setWorking(true);
+    try {
+      setError(null);
+      const res = await fetch("/api/accounts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(form)
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error ?? "创建失败");
+        return;
+      }
+      setForm({ ...form, name: "", institution: "", notes: "" });
+      start(() => router.refresh());
+    } catch {
+      setError("创建失败，请检查连接后重试");
+    } finally {
+      setWorking(false);
     }
-    setForm({ ...form, name: "", institution: "", notes: "" });
-    start(() => router.refresh());
   }
 
   async function removeAccount(id: number, name: string) {
-    if (!confirm(`删除账户「${name}」会级联删除其下所有资产，确认？`)) return;
-    await fetch(`/api/accounts/${id}`, { method: "DELETE" });
-    start(() => router.refresh());
+    if (pending) return;
+    setWorking(true);
+    try {
+      if (!await confirmAction(`删除账户「${name}」会级联删除其下所有资产，确认？`)) return;
+      const res = await fetch(`/api/accounts/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body.error ?? "删除账户失败");
+        return;
+      }
+      start(() => router.refresh());
+    } catch {
+      setError("删除失败，请检查连接后重试");
+    } finally {
+      setWorking(false);
+    }
   }
 
   const byCat: Record<number, Account[]> = {};
@@ -126,20 +152,20 @@ export function AccountManager({
             {error && (
               <div
                 role="alert"
-                className="rounded-md border border-loss-100 bg-loss-50 px-3 py-2 text-[13px] text-loss-700 md:col-span-12"
+                className="rounded-md border border-gain-100 bg-gain-50 px-3 py-2 text-[14px] text-gain-700 md:col-span-12"
               >
                 {error}
               </div>
             )}
             <div className="md:col-span-12">
               <button className="btn-primary" disabled={pending}>
-                <Plus className="h-3.5 w-3.5" /> 添加账户
+                <Plus className="h-3.5 w-3.5" /> {pending ? "处理中…" : "添加账户"}
               </button>
             </div>
           </form>
 
           {accounts.length === 0 ? (
-            <div className="py-6 text-center text-[13px] text-ink-400">
+            <div className="py-6 text-center text-[14px] text-ink-400">
               还没有账户。请先在上面创建一个账户（小类），如「工行活期」「雪球账户」。
             </div>
           ) : (
@@ -158,7 +184,7 @@ export function AccountManager({
                         aria-hidden="true"
                         style={{ background: CAT_COLORS[c.code as CategoryCode] }}
                       />
-                      <span className="text-[12px] font-semibold text-ink-900">
+                      <span className="text-[13px] font-semibold text-ink-900">
                         {c.name}
                       </span>
                       <span className="chip tabular ml-auto">{list.length}</span>
@@ -167,14 +193,14 @@ export function AccountManager({
                       {list.map((a) => (
                         <li
                           key={a.id}
-                          className="flex items-center justify-between py-2 text-[12.5px]"
+                          className="flex items-center justify-between py-2 text-[13px]"
                         >
                           <div className="min-w-0">
                             <div className="truncate font-medium text-ink-800">
                               {a.name}
                             </div>
                             {(a.institution || a.notes) && (
-                              <div className="truncate text-[11px] text-ink-400">
+                              <div className="truncate text-[12px] text-ink-400">
                                 {a.institution}
                                 {a.institution && a.notes && " · "}
                                 {a.notes}
@@ -184,6 +210,7 @@ export function AccountManager({
                           <button
                             onClick={() => removeAccount(a.id, a.name)}
                             aria-label="删除账户"
+                            disabled={pending}
                             className="btn-ghost h-6 w-6 p-0 text-loss-600 hover:bg-loss-50"
                           >
                             <Trash2 className="h-3 w-3" />

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Sector } from "recharts";
 import { useTheme } from "@/lib/useTheme";
+import { formatMoney } from "@/lib/utils";
 
 // 负债不参与资产构成（单独展示），此处只列正向资产大类
 const CATEGORY_ORDER = [
@@ -23,36 +24,22 @@ const LABELS: Record<string, string> = {
   other: "其他"
 };
 
-const DARK_COLORS: Record<string, string> = {
-  cash: "#60A5FA",
-  deposit: "#818CF8",
-  fund: "#D4A94E",
-  securities: "#34D399",
-  crypto: "#F59E0B",
-  other: "#94A3B8"
-};
-
-const LIGHT_COLORS: Record<string, string> = {
-  cash: "#2563EB",
-  deposit: "#4F46E5",
-  fund: "#B88B3A",
-  securities: "#059669",
-  crypto: "#D97706",
-  other: "#64748B"
-};
+const CATEGORY_COLORS = Object.fromEntries(CATEGORY_ORDER.map((key) => [key, `var(--cat-${key})`]));
 
 export function AllocationChart({
   data,
   currency,
-  total
+  total,
+  compact = false
 }: {
   data: Record<string, number>;
   currency: string;
   total: number;
+  compact?: boolean;
 }) {
   const isDark = useTheme() === "dark";
-  const colors = isDark ? DARK_COLORS : LIGHT_COLORS;
-  const stroke = isDark ? "#111827" : "#FFFFFF";
+  const colors = CATEGORY_COLORS;
+  const stroke = "rgb(var(--canvas-raised))";
   const hoverRowBg = isDark ? "rgba(148, 163, 184, 0.08)" : "rgba(15, 42, 71, 0.05)";
 
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -88,11 +75,11 @@ export function AllocationChart({
   const activeRow = legendRows.find((r) => r.key === activeKey) ?? null;
 
   return (
-    <div className="flex flex-col gap-6 md:flex-row md:items-center">
+    <div className={`allocation-chart flex flex-col gap-6 md:flex-row md:items-center ${compact ? "allocation-compact" : ""}`}>
       {/* 左：饼图 */}
-      <div className="relative mx-auto h-[220px] w-full max-w-[260px] shrink-0 md:mx-0 md:w-[260px]">
+      <div className="allocation-ring relative mx-auto h-[220px] w-full max-w-[260px] shrink-0 md:mx-0 md:w-[260px]">
         {nonEmptyCount === 0 ? (
-          <div className="flex h-full items-center justify-center text-[12px] text-ink-400">
+          <div className="flex h-full items-center justify-center text-[13px] text-ink-400">
             暂无数据
           </div>
         ) : (
@@ -103,8 +90,8 @@ export function AllocationChart({
                   data={pieRows}
                   dataKey="value"
                   nameKey="name"
-                  innerRadius={64}
-                  outerRadius={96}
+                  innerRadius={66}
+                  outerRadius={88}
                   paddingAngle={1}
                   stroke={stroke}
                   strokeWidth={2}
@@ -139,24 +126,23 @@ export function AllocationChart({
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
               {activeRow ? (
                 <>
-                  <div className="text-[10px] font-medium uppercase tracking-[0.1em] text-ink-400">
+                  <div className="text-[11px] font-medium uppercase tracking-[0.1em] text-ink-400">
                     {activeRow.name}
                   </div>
-                  <div className="tabular mt-0.5 text-[18px] font-semibold text-ink-900">
-                    {moneyFmt(activeRow.value)}{" "}
-                    <span className="text-[11px] text-ink-400">{currency}</span>
+                  <div className={`tabular mt-0.5 font-semibold text-ink-900 ${compact ? "text-[14px]" : "text-[18px]"}`}>
+                    {compact ? formatMoney(activeRow.value, currency) : <>{moneyFmt(activeRow.value)} <span className="text-[12px] text-ink-400">{currency}</span></>}
                   </div>
-                  <div className="tabular text-[11px] text-ink-500">
+                  <div className="tabular text-[12px] text-ink-500">
                     {(activeRow.pct * 100).toFixed(1)}%
                   </div>
                 </>
               ) : (
                 <>
-                  <div className="text-[10px] font-medium uppercase tracking-[0.1em] text-ink-400">
-                    大类
+                  <div className="text-[11px] font-medium uppercase tracking-[0.1em] text-ink-400">
+                    {compact ? "总资产" : "大类"}
                   </div>
-                  <div className="tabular mt-0.5 text-lg font-semibold text-ink-900">
-                    {nonEmptyCount}
+                  <div className={`tabular mt-0.5 font-semibold text-ink-900 ${compact ? "text-[14px]" : "text-lg"}`}>
+                    {compact ? formatMoney(total, currency) : nonEmptyCount}
                   </div>
                 </>
               )}
@@ -173,9 +159,10 @@ export function AllocationChart({
           return (
             <li
               key={r.key}
+              title={compact ? `${r.name} · ${formatMoney(r.value, currency)}` : undefined}
               onMouseEnter={() => !isZero && setActiveKey(r.key)}
               onMouseLeave={() => setActiveKey(null)}
-              className={`flex items-center justify-between gap-4 py-2 text-[13px] transition-colors duration-150 ${
+              className={`flex items-center justify-between gap-4 py-2 text-[14px] transition-colors duration-150 ${
                 isZero ? "opacity-50" : "cursor-default"
               }`}
               style={{
@@ -203,10 +190,10 @@ export function AllocationChart({
                 </span>
               </div>
               <div className="flex shrink-0 items-baseline gap-3 tabular">
-                <span className={isActive ? "text-ink-900" : "text-ink-800"}>
+                {!compact && <span className={isActive ? "text-ink-900" : "text-ink-800"}>
                   {isZero ? "—" : `${moneyFmt(r.value)} ${currency}`}
-                </span>
-                <span className="w-14 text-right text-[11px] text-ink-400">
+                </span>}
+                <span className="w-14 text-right text-[12px] text-ink-400">
                   {isZero ? "0%" : `${(r.pct * 100).toFixed(1)}%`}
                 </span>
               </div>

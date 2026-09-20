@@ -26,27 +26,27 @@ export function CategoryTabs({
             role="tab"
             aria-selected={isActive}
             href={`/assets${t.key === "all" ? "" : `?cat=${t.key}`}`}
-            className={`group relative flex min-w-[120px] shrink-0 flex-col gap-0.5 px-5 py-3 transition-colors duration-150 ${
+            className={`group relative flex min-w-[108px] shrink-0 flex-col gap-0.5 px-4 py-4 transition-colors duration-150 ${
               isActive ? "text-ink-900" : "text-ink-500 hover:text-ink-800"
             }`}
           >
-            <div className="flex items-center gap-2 text-[12px] font-medium">
+            <div className="flex items-center gap-2 text-[13px] font-medium">
               <span>{t.label}</span>
               <span
-                className={`tabular rounded px-1.5 py-0.5 text-[10px] ${
-                  isActive ? "bg-gold-500 text-canvas" : "bg-canvas-sunk text-ink-500"
+                className={`tabular rounded px-1.5 py-0.5 text-[11px] ${
+                  isActive ? "bg-brand-100 text-brand-700" : "bg-canvas-sunk text-ink-500"
                 }`}
               >
                 {t.count}
               </span>
             </div>
-            <div className="tabular text-[13px] font-semibold">
+            <div className="tabular text-[14px] font-semibold">
               {formatMoney(t.total, currency, 0)}
             </div>
             {isActive && (
               <span
                 aria-hidden="true"
-                className="absolute bottom-0 left-0 right-0 h-[2px] bg-gold-500"
+                className="absolute bottom-0 left-0 right-0 h-[2px] bg-brand-500"
               />
             )}
           </Link>

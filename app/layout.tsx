@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { cookies, headers } from "next/headers";
 import "./globals.css";
+import { ConfirmProvider } from "@/components/ui/ConfirmProvider";
 import { TopNav } from "@/components/TopNav";
 import { ThemeProvider, type Theme } from "@/lib/themeContext";
 import { startAutoRefreshScheduler } from "@/lib/autoRefresh";
@@ -59,18 +60,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           跳到主内容
         </a>
         <ThemeProvider initial={theme}>
-          <div className="min-h-screen">
+          <ConfirmProvider>
+          <div className="app-shell">
             <TopNav />
-            <main id="main" className="mx-auto max-w-[1200px] px-6 py-7">
+            <main id="main" className="app-main">
               {children}
             </main>
-            <footer className="mx-auto max-w-[1200px] px-6 pb-8 pt-4 text-[11px] text-ink-400">
-              <span className="tabular">资产管家</span>
-              <span className="mx-2 text-hair-strong">·</span>
-              <span>本地优先 · 数据仅保存在本机 SQLite</span>
-            </footer>
             <AiAssistant />
           </div>
+          </ConfirmProvider>
         </ThemeProvider>
       </body>
     </html>

@@ -13,6 +13,7 @@ const config: Config = {
     extend: {
       fontFamily: {
         sans: [
+          "-apple-system",
           "Inter",
           "-apple-system",
           "BlinkMacSystemFont",
@@ -38,6 +39,15 @@ const config: Config = {
           700: cv("--ink-700"),
           800: cv("--ink-800"),
           900: cv("--ink-900")
+        },
+        brand: {
+          50: cv("--brand-50"),
+          100: cv("--brand-100"),
+          200: cv("--brand-200"),
+          400: cv("--brand-400"),
+          500: cv("--brand-500"),
+          600: cv("--brand-600"),
+          700: cv("--brand-700"),
         },
         gold: {
           50: cv("--gold-50"),
@@ -65,7 +75,8 @@ const config: Config = {
         canvas: {
           DEFAULT: cv("--canvas"),
           raised: cv("--canvas-raised"),
-          sunk: cv("--canvas-sunk")
+          sunk: cv("--canvas-sunk"),
+          inset: cv("--canvas-sunk")
         },
         hair: {
           DEFAULT: cv("--hair"),

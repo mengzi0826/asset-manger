@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { getSetting } from "@/lib/db";
 import { kickoffRatesRefresh, listRates } from "@/lib/fx";
 import { SUPPORTED_CURRENCIES } from "@/lib/currencies";
@@ -31,20 +32,17 @@ export default async function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <div className="eyebrow">偏好设置</div>
-        <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-ink-900">设置</h1>
-        <p className="mt-0.5 text-[13px] text-ink-500">
-          基准货币 · 聚合数据 AppKey · 汇率与股票价格 · 数据备份
-        </p>
-      </div>
-
+      <PageHeader title="设置" />
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="设置分区"><a href="#preferences">显示偏好</a><a href="#keys">数据来源</a><a href="#fx">汇率管理</a><a href="#stocks">股票行情</a><a href="#backup">备份与恢复</a></nav>
+        <div className="settings-content">
+      <section id="preferences" aria-label="显示偏好">
       <div className="card">
         <div className="card-header">
           <div className="card-title">基准货币</div>
         </div>
         <div className="card-body flex flex-wrap items-center justify-between gap-3">
-          <div className="text-[13px] text-ink-500">
+          <div className="text-[14px] text-ink-500">
             总览、历史曲线以此货币结算。当前：
             <span className="tabular ml-1 font-semibold text-ink-900">{baseCurrency}</span>
           </div>
@@ -52,18 +50,21 @@ export default async function SettingsPage() {
         </div>
       </div>
 
-      <JuheApiKeyForm fx={juheFxState} stock={juheStockState} />
+      </section>
+      <section id="keys" aria-label="数据来源"><JuheApiKeyForm fx={juheFxState} stock={juheStockState} /></section>
 
-      <FxManager rates={rates} supported={[...SUPPORTED_CURRENCIES]} />
+      <section id="fx" aria-label="汇率管理"><FxManager rates={rates} supported={[...SUPPORTED_CURRENCIES]} /></section>
 
-      <StockManager
+      <section id="stocks" aria-label="股票行情"><StockManager
         items={stockItems}
         lastRefreshedAt={lastStocksRefreshAt}
         nextRefreshAt={nextRefreshAt}
         refreshFailures={stockRefreshFailures}
-      />
+      /></section>
 
-      <BackupPanel />
+      <section id="backup" aria-label="备份与恢复"><BackupPanel /></section>
+        </div>
+      </div>
     </div>
   );
 }

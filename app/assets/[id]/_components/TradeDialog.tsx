@@ -1,5 +1,9 @@
 "use client";
 
+import { cloneElement, isValidElement, useId } from "react";
+
+import { useConfirm } from "@/components/ui/ConfirmProvider";
+
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Coins, Loader2, LogOut, TrendingDown, TrendingUp } from "lucide-react";
@@ -32,6 +36,7 @@ export function TradeDialog({
   cashAssets: CashAssetOption[];
 }) {
   const router = useRouter();
+  const confirmAction = useConfirm();
   const [side, setSide] = useState<Side>("buy");
   const [quantity, setQuantity] = useState("");
   const [dividendAmount, setDividendAmount] = useState("");
@@ -122,106 +127,113 @@ export function TradeDialog({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
-    if (isDividend) {
-      if (currentQuantity <= 0) return setError("当前无持仓，无法分红");
-      if (!hasDividendAmount) return setError("请填写大于 0 的分红到账总金额");
-      if (!selectedCash) return setError("请选择分红入账的现金账户");
-      const finalUnitCost = Number(effectiveUnitCost);
-      if (effectiveUnitCost === "" || !Number.isFinite(finalUnitCost) || finalUnitCost < 0) {
-        return setError("请填写有效的分红后成本价");
-      }
+    if (pending) return;
+    try {
+      setError(null);
+      if (isDividend) {
+        if (currentQuantity <= 0) return setError("当前无持仓，无法分红");
+        if (!hasDividendAmount) return setError("请填写大于 0 的分红到账总金额");
+        if (!selectedCash) return setError("请选择分红入账的现金账户");
+        const finalUnitCost = Number(effectiveUnitCost);
+        if (effectiveUnitCost === "" || !Number.isFinite(finalUnitCost) || finalUnitCost < 0) {
+          return setError("请填写有效的分红后成本价");
+        }
 
-      setPending(true);
-      try {
-        const res = await fetch(`/api/assets/${assetId}/dividend`, {
+        setPending(true);
+        try {
+          const res = await fetch(`/api/assets/${assetId}/dividend`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              amount: dividendNum,
+              unit_cost: unitCostTouched ? finalUnitCost : null,
+              cash_asset_id: selectedCash.id
+            })
+          });
+          if (!res.ok) {
+            const j = await res.json().catch(() => ({}));
+            return setError(j.error ?? "分红入账失败");
+          }
+          setDividendAmount("");
+          setUnitCost("");
+          setUnitCostTouched(false);
+          setCashAssetId("");
+          router.refresh();
+        } catch {
+          setError("分红入账失败，请稍后重试");
+        } finally {
+          setPending(false);
+        }
+        return;
+      }
+      if (!hasPrice) return setError("请填写成交价");
+
+      if (isClose) {
+        if (currentQuantity <= 0) return setError("当前无持仓，无法清仓");
+        if (
+          !await confirmAction(
+            `确认清仓「${assetName}」？将卖出全部 ${currentQuantity} 股${
+              selectedCash ? `，回款 ${round(currentQuantity * priceNum, 2)} ${currency} 转入「${selectedCash.name}」` : ""
+            }，并从资产中删除该证券。`
+          )
+        )
+          return;
+
+        setPending(true);
+        const res = await fetch(`/api/assets/${assetId}/liquidate`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            amount: dividendNum,
-            unit_cost: unitCostTouched ? finalUnitCost : null,
-            cash_asset_id: selectedCash.id
+            price: priceNum,
+            cash_asset_id: cashAssetId === "" ? null : Number(cashAssetId)
           })
         });
         if (!res.ok) {
           const j = await res.json().catch(() => ({}));
-          return setError(j.error ?? "分红入账失败");
+          setError(j.error ?? "清仓失败");
+          setPending(false);
+          return;
         }
-        setDividendAmount("");
-        setUnitCost("");
-        setUnitCostTouched(false);
-        setCashAssetId("");
-        router.refresh();
-      } catch {
-        setError("分红入账失败，请稍后重试");
-      } finally {
-        setPending(false);
-      }
-      return;
-    }
-    if (!hasPrice) return setError("请填写成交价");
-
-    if (isClose) {
-      if (currentQuantity <= 0) return setError("当前无持仓，无法清仓");
-      if (
-        !confirm(
-          `确认清仓「${assetName}」？将卖出全部 ${currentQuantity} 股${
-            selectedCash ? `，回款 ${round(currentQuantity * priceNum, 2)} ${currency} 转入「${selectedCash.name}」` : ""
-          }，并从资产中删除该证券。`
-        )
-      )
+        // 资产已删除，编辑页不再存在，跳回持仓列表
+        router.push("/assets");
         return;
+      }
+
+      if (!hasQty) return setError("请填写成交股数");
+      const finalUnitCost = Number(effectiveUnitCost);
+      if (!Number.isFinite(finalUnitCost) || finalUnitCost < 0) return setError("均价无效");
+      if (sellExceeds) return setError("减持股数超过当前持仓");
+      if (cashInsufficient) return setError("现金余额不足");
 
       setPending(true);
-      const res = await fetch(`/api/assets/${assetId}/liquidate`, {
+      const res = await fetch(`/api/assets/${assetId}/trade`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          side,
+          quantity: qtyNum,
           price: priceNum,
+          unit_cost: finalUnitCost,
           cash_asset_id: cashAssetId === "" ? null : Number(cashAssetId)
         })
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        setError(j.error ?? "清仓失败");
+        setError(j.error ?? "交易失败");
         setPending(false);
         return;
       }
-      // 资产已删除，编辑页不再存在，跳回持仓列表
-      router.push("/assets");
-      return;
-    }
-
-    if (!hasQty) return setError("请填写成交股数");
-    const finalUnitCost = Number(effectiveUnitCost);
-    if (!Number.isFinite(finalUnitCost) || finalUnitCost < 0) return setError("均价无效");
-    if (sellExceeds) return setError("减持股数超过当前持仓");
-    if (cashInsufficient) return setError("现金余额不足");
-
-    setPending(true);
-    const res = await fetch(`/api/assets/${assetId}/trade`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        side,
-        quantity: qtyNum,
-        price: priceNum,
-        unit_cost: finalUnitCost,
-        cash_asset_id: cashAssetId === "" ? null : Number(cashAssetId)
-      })
-    });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      setError(j.error ?? "交易失败");
       setPending(false);
-      return;
+      setQuantity("");
+      setUnitCost("");
+      setUnitCostTouched(false);
+      setCashAssetId("");
+      router.refresh();
+    } catch {
+      setError("操作失败，请检查连接后重试");
+    } finally {
+      setPending(false);
     }
-    setPending(false);
-    setQuantity("");
-    setUnitCost("");
-    setUnitCostTouched(false);
-    setCashAssetId("");
-    router.refresh();
   }
 
   return (
@@ -238,7 +250,7 @@ export function TradeDialog({
           <button
             type="button"
             onClick={() => selectSide("buy")}
-            className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[13px] font-medium transition ${
+            className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[14px] font-medium transition ${
               side === "buy" ? "bg-gain-50 text-gain-700" : "text-ink-500 hover:text-ink-800"
             }`}
           >
@@ -247,7 +259,7 @@ export function TradeDialog({
           <button
             type="button"
             onClick={() => selectSide("sell")}
-            className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[13px] font-medium transition ${
+            className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[14px] font-medium transition ${
               side === "sell" ? "bg-loss-50 text-loss-700" : "text-ink-500 hover:text-ink-800"
             }`}
           >
@@ -256,7 +268,7 @@ export function TradeDialog({
           <button
             type="button"
             onClick={() => selectSide("close")}
-            className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[13px] font-medium transition ${
+            className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[14px] font-medium transition ${
               side === "close" ? "bg-loss-50 text-loss-700" : "text-ink-500 hover:text-ink-800"
             }`}
           >
@@ -265,7 +277,7 @@ export function TradeDialog({
           <button
             type="button"
             onClick={() => selectSide("dividend")}
-            className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[13px] font-medium transition ${
+            className={`inline-flex items-center gap-1.5 rounded px-3.5 py-1.5 text-[14px] font-medium transition ${
               isDividend ? "bg-gold-50 text-gold-700" : "text-ink-500 hover:text-ink-800"
             }`}
           >
@@ -394,7 +406,7 @@ export function TradeDialog({
         </Field>
 
         {/* 预览 */}
-        <div className="rounded-md border border-hair bg-canvas-inset px-3.5 py-3 text-[12px] tabular">
+        <div className="rounded-md border border-hair bg-canvas-inset px-3.5 py-3 text-[13px] tabular">
           <div className="grid grid-cols-2 gap-y-1.5 sm:grid-cols-4">
             <Preview
               label={isDividend ? "分红到账" : isClose ? "回款金额" : "成交额"}
@@ -446,7 +458,7 @@ export function TradeDialog({
         {error && (
           <div
             role="alert"
-            className="rounded-md border border-loss-100 bg-loss-50 px-3.5 py-2.5 text-[13px] text-loss-700"
+            className="rounded-md border border-gain-100 bg-gain-50 px-3.5 py-2.5 text-[14px] text-gain-700"
           >
             {error}
           </div>
@@ -483,14 +495,17 @@ function Field({
   required?: boolean;
   hint?: string;
 }) {
+  const id = useId();
+  const control = isValidElement<{ id?: string; "aria-describedby"?: string }>(children) ? children : null;
+  const controlId = control?.props.id ?? id;
   return (
     <div>
-      <label className="label">
+      <label className="label" htmlFor={controlId}>
         {label}
-        {required && <span className="ml-1 text-loss-600">*</span>}
+        {required && <span className="ml-1 text-gain-700">*</span>}
       </label>
-      {children}
-      {hint && <p className="mt-1 text-[11px] text-ink-400">{hint}</p>}
+      {control ? cloneElement(control, { id: controlId, "aria-describedby": hint ? `${id}-hint` : control.props["aria-describedby"] }) : children}
+      {hint && <p id={`${id}-hint`} className="mt-1 text-[12px] text-ink-400">{hint}</p>}
     </div>
   );
 }
@@ -506,7 +521,7 @@ function Preview({
 }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wider text-ink-400">{label}</div>
+      <div className="text-[11px] uppercase tracking-wider text-ink-400">{label}</div>
       <div className={`mt-0.5 font-medium ${danger ? "text-loss-700" : "text-ink-900"}`}>{value}</div>
     </div>
   );
