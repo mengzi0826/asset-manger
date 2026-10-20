@@ -54,6 +54,7 @@
 | `lib/stocks.ts` | 代码解析、行情刷新、刷新日志 |
 | `lib/time.ts` | 时区、8h 汇率、10:00/14:00 股票锚点 |
 | `lib/juheKeys.ts` | Key 解析 |
+| `lib/interest.ts` | 四项利息账户、日息入账 |
 | `lib/advisor.ts` | 总览建议规则 |
 | `lib/autoRefresh.ts` | 进程内每 60s 自动检查刷新 |
 | `lib/assetsNav.ts` | 资产列表 tab 回跳 |
@@ -75,9 +76,9 @@
 | `asset` | 明细。证券用 `quantity` + `unit_cost` + `current_price` + `symbol`；多数其它类型用 `amount`。`change_*` 只服务证券行情会话日盈亏。 |
 | `fx_rate` | 汇率缓存。`source`：`juhe` 或 `manual`。旧 `frankfurter` 下次成功刷新会被覆盖。 |
 | `fx_rate_history` | 每个币对每个整点最终生效的汇率观测；自动和手动汇率都会写入 |
-| `setting` | 键值：`base_currency`、两枚 AppKey、`last_stocks_refresh_at`、`last_fx_refresh_error`、`last_stocks_refresh_error` |
+| `setting` | 键值：`base_currency`、两枚 AppKey、四项 `interest_annual_rate_*` / `interest_asset_*`、`last_stocks_refresh_at`、`last_fx_refresh_error`、`last_stocks_refresh_error` |
 | `asset_change` | create / update / delete；update 的 `field_changes` 为 JSON diff |
-| `portfolio_event` | 统一业务事件头：入金、消费、买卖、分红、清仓、资产增删、手动校准 |
+| `portfolio_event` | 统一业务事件头：入金、消费、利息收入、买卖、分红、清仓、资产增删、手动校准 |
 | `portfolio_event_leg` | 同一事件涉及的资产腿；用带符号金额/份额把证券和现金关联起来 |
 | `portfolio_snapshot` | 每日净资产快照，`UNIQUE(date, base_currency)`，写入即覆盖当天 |
 | `asset_valuation_daily` | 每日逐资产估值；固化原币价值、当时汇率、基准币价值与价格/成本字段 |
@@ -86,7 +87,7 @@
 
 `change_quote_date`：沪深/港股从接口 `date`（优先）或 `time` 解析；美股从 `ustime` 取交易月日、用 `chtime` 推断年份。解析不到就写 **null**，禁止回落成 `todayCn()`。空日期不计入行情会话日盈亏。`change_updated_at` 是历史列，判定**不要再用它**。不要在 `migrateSchema` 里把 null 日期再填回去。
 
-JSON 备份（`app/api/backup`）`version: 5` 导出：category / account / asset / fx_rate / **fx_rate_history** / setting / asset_change / portfolio_event / portfolio_event_leg / portfolio_snapshot / **asset_valuation_daily** / stock_price_daily / **entity_id_sequence** / **history_integrity**。不含 `stock_refresh_log`。覆盖模式会先删除事件腿、事件头、估值历史、汇率历史、日线、刷新日志和上述业务表（分类、身份高水位和覆盖元数据除外）再导入。旧版备份缺事件表、估值/汇率历史或 `stock_price_daily` 仍可导入；旧备份里的 `fx_rate` 会精确补成一个历史观测点。
+JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asset / fx_rate / **fx_rate_history** / setting / asset_change / portfolio_event / portfolio_event_leg / portfolio_snapshot / **asset_valuation_daily** / stock_price_daily / **interest_accrual** / **entity_id_sequence** / **history_integrity**。不含 `stock_refresh_log`。覆盖模式会先删除事件腿、事件头、估值历史、汇率历史、日线、利息入账、刷新日志和上述业务表（分类、身份高水位和覆盖元数据除外）再导入。旧版备份缺事件表、估值/汇率历史、`stock_price_daily` 或 `interest_accrual` 仍可导入；旧备份里的 `fx_rate` 会精确补成一个历史观测点。
 
 `portfolio_event` 从功能上线后开始可靠记录。旧 `asset_change` 无法确定多资产记录是否属于同一笔操作，禁止猜测关联或自动回填。业务 API 必须在更新资产的**同一个 SQLite 事务**里调用 `recordPortfolioEvent`；通过 `lib/portfolioMutations.ts` 的 `portfolioTransaction` 同时提交当天快照，快照失败必须回滚业务。账户删除/分类调整也要逐资产留痕。自动行情刷新不写业务事件。
 
@@ -194,6 +195,19 @@ JSON 备份（`app/api/backup`）`version: 5` 导出：category / account / asse
 - 记录复用 `asset_change`：除 `amount` diff 外，`field_changes` 还写入 `cash_flow_type`、带方向的 `cash_flow_amount` 和 `cash_flow_reason`。`listCashFlowEntries` 用它们还原现金流列表。
 - 同一事务还要写 `portfolio_event` 的 `cash_deposit` / `cash_expense` 与现金资产腿，供报表统一统计。
 
+## 利息收入
+
+四项分开计息，利率在设置页，小数存在 `interest_annual_rate_cny` / `hkd` / `usd` / `crypto`（`0.02` = 2%）。
+
+- 人民币、港币、美元：对应币种的**全部现金**（含该币种利息账户）。
+- 加密货币：美元计价的**全部加密资产**（含加密货币利息账户）。存款、基金、证券不计。
+- 日息 = 本金 × 年化 / 365，四舍五入到分。每个北京日首次计息时锁定本金；利息账户余额次日复利。年化为 0，或四舍五入后为 0，不入账。
+- 当日修改利率按已锁定本金重算，差额调整利息账户和当日 `interest_income` 事件。
+- 自动账户在现金大类三个、加密货币大类一个。`account.notes` 为 `interest:cny|hkd|usd|crypto`，资产 ID 记在 `interest_asset_*`。缺失则重建。
+- 入账写 `interest_income`（`source=system`，`reason=利息收入`），`asset_change` 用 `cash_flow_type=interest`。`interest_accrual` 按日防重复。
+- 变化明细单列「利息收入」，并展开四项。余额对不上时仍不得把差额推断成利息。
+- `accrueTodayInterest()` 在自动刷新，以及总览 / 资产 / 历史 / 设置读取前调用。只有余额或账户实际变化才写当日快照。
+
 ---
 
 ## 快照
@@ -202,7 +216,7 @@ JSON 备份（`app/api/backup`）`version: 5` 导出：category / account / asse
 
 `GET /api/valuation-history` 是逐资产估值只读接口；同时传 `from` / `to` 会返回 `summarizeFxImpact` 的汇率归因与两端数据覆盖标记。归因使用对称分解：平均原币敞口 × 汇率变化；新出现/消失的币种、缺失汇率和只有旧版总快照而没有逐资产明细的差额都放入 `unclassifiedBaseValueChange`，不要猜测或反推旧日明细。
 
-总览与净值曲线的变化明细共用 `lib/netWorthHistory.ts` / `lib/netWorthChange.ts`。优先较昨日，缺昨日时标注上次快照日期；入金等原币项目按两端平均汇率折算，与对称汇率分解对账。证券盈亏用端点市值减去成交本金变动（含清仓），不要用行情会话日盈亏替代；未关联现金的本金变动单列。事件读取不得分页截断，可靠事件记录之前的证券变化、缺估值/汇率等差额保留未归因，不反推利息。新手动校准事件需在 metadata 保留原币估值、分类与币种的 before/after，供归因使用。验证：`node scripts/test-net-worth-change.cjs`。
+总览与净值曲线的变化明细共用 `lib/netWorthHistory.ts` / `lib/netWorthChange.ts`。优先较昨日，缺昨日时标注上次快照日期；入金等原币项目按两端平均汇率折算，与对称汇率分解对账。证券盈亏用端点市值减去成交本金变动（含清仓），不要用行情会话日盈亏替代；未关联现金的本金变动单列。事件读取不得分页截断，可靠事件记录之前的证券变化、缺估值/汇率等差额保留未归因。已入账的 `interest_income` 记为利息收入；没有该事件时不把差额推断成利息。新手动校准事件需在 metadata 保留原币估值、分类与币种的 before/after，供归因使用。验证：`node scripts/test-net-worth-change.cjs`。
 
 ---
 

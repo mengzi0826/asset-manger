@@ -11,7 +11,8 @@ export type PortfolioEventType =
   | "security_buy"
   | "security_sell"
   | "security_dividend"
-  | "security_liquidation";
+  | "security_liquidation"
+  | "interest_income";
 
 export type PortfolioEventSource = "user" | "system" | "import";
 

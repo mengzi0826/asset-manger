@@ -15,13 +15,15 @@ export function CashFlowPanel({
   assetName,
   currency,
   currentAmount,
-  entries
+  entries,
+  readOnly = false
 }: {
   assetId: number;
   assetName: string;
   currency: string;
   currentAmount: number;
   entries: CashFlowEntry[];
+  readOnly?: boolean;
 }) {
   const router = useRouter();
   const [type, setType] = useState<FlowType>("deposit");
@@ -69,13 +71,13 @@ export function CashFlowPanel({
     <div className="card">
       <div className="card-header">
         <div>
-          <div className="card-title">现金流（入金 / 消费）</div>
-          <p className="mt-1 text-[12px] text-ink-400">记录金额和原因，便于日后复盘余额变化</p>
+          <div className="card-title">{readOnly ? "利息收入" : "现金流（入金 / 消费）"}</div>
+          <p className="mt-1 text-[12px] text-ink-400">{readOnly ? "按设置中的年化利率，每个北京日入账一次" : "记录金额和原因，便于日后复盘余额变化"}</p>
         </div>
         <span className="chip tabular">当前 {formatMoney(currentAmount, currency, 2)}</span>
       </div>
       <div className="card-body space-y-5">
-        <form onSubmit={submit} className="space-y-4">
+        {!readOnly && <form onSubmit={submit} className="space-y-4">
           <div className="inline-flex rounded-md border border-hair p-0.5">
             <button
               type="button"
@@ -148,29 +150,31 @@ export function CashFlowPanel({
               {error}
             </div>
           )}
-        </form>
+        </form>}
 
-        <div className="border-t border-hair pt-4">
+        <div className={readOnly ? "" : "border-t border-hair pt-4"}>
           <div className="mb-2.5 flex items-center justify-between gap-3">
-            <div className="text-[13px] font-medium text-ink-700">最近现金流</div>
+            <div className="text-[13px] font-medium text-ink-700">{readOnly ? "入账记录" : "最近现金流"}</div>
             <span className="text-[12px] text-ink-400">{entries.length} 条</span>
           </div>
           {entries.length === 0 ? (
             <div className="rounded-md bg-canvas-sunk/60 px-3 py-5 text-center text-[13px] text-ink-400">
-              暂无入金或消费记录
+              {readOnly ? "暂无利息收入" : "暂无入金、消费或利息记录"}
             </div>
           ) : (
             <ul className="divide-y divide-hair rounded-md border border-hair px-3.5">
               {entries.map((entry) => {
-                const isDeposit = entry.type === "deposit";
+                const isInterest = entry.type === "interest";
+                const isDeposit = entry.type === "deposit" || (isInterest && entry.amount >= 0);
+                const label = isInterest ? "利息收入" : entry.type === "deposit" ? "入金" : "消费";
                 return (
                   <li key={entry.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-[13px]">
                     <span className={isDeposit ? "chip chip-gain" : "chip chip-loss"}>
-                      {isDeposit ? "入金" : "消费"}
+                      {label}
                     </span>
                     <span className="min-w-0 flex-1 text-ink-700">{entry.reason}</span>
                     <span className={`tabular font-medium ${isDeposit ? "text-gain-700" : "text-loss-700"}`}>
-                      {isDeposit ? "+" : "-"}{formatMoney(Math.abs(entry.amount), currency, 2)}
+                      {isDeposit ? "+" : "−"}{formatMoney(Math.abs(entry.amount), currency, 2)}
                     </span>
                     <span className="tabular basis-full text-right text-[12px] text-ink-400 sm:basis-auto">
                       {formatCnDateTime(entry.createdAt)}

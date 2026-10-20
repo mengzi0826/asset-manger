@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { getDB, type Account, type AssetRow, type Category } from "@/lib/db";
 import { assetsListHref } from "@/lib/assetsNav";
 import { listCashFlowEntries } from "@/lib/history";
+import { accrueTodayInterest, interestBucketForAsset } from "@/lib/interest";
 import { AssetForm } from "../_components/AssetForm";
 import { CashFlowPanel } from "./_components/CashFlowPanel";
 import { TradeDialog, type CashAssetOption } from "./_components/TradeDialog";
@@ -21,6 +22,7 @@ export default async function EditAssetPage({
 }) {
   const id = Number(params.id);
   if (!Number.isInteger(id)) notFound();
+  accrueTodayInterest();
   const db = getDB();
   const asset = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow | undefined;
   if (!asset) notFound();
@@ -32,6 +34,7 @@ export default async function EditAssetPage({
   );
   const isSecurity = assetCategory?.code === "securities";
   const isCash = assetCategory?.code === "cash";
+  const interestBucket = interestBucketForAsset(asset.id);
   const cashAssets = isSecurity
     ? (db
         .prepare(
@@ -68,8 +71,20 @@ export default async function EditAssetPage({
         </OperationSheet>
       )}
       {isCash && (
-        <OperationSheet title="现金收支" description="记录入金与消费，回看近期现金流。" action="记录收支">
+        <OperationSheet title={interestBucket ? "利息与现金收支" : "现金收支"} description={interestBucket ? "利息按设置年化每日入账。也可另行记录入金与消费。" : "记录入金与消费，回看近期现金流。"} action={interestBucket ? "查看记录" : "记录收支"}>
         <CashFlowPanel
+          assetId={asset.id}
+          assetName={asset.name}
+          currency={asset.currency}
+          currentAmount={asset.amount ?? 0}
+          entries={listCashFlowEntries(asset.id)}
+        />
+        </OperationSheet>
+      )}
+      {interestBucket === "crypto" && (
+        <OperationSheet title="利息收入" description="按设置中的加密货币年化利率，每日入账到此账户。" action="查看利息">
+        <CashFlowPanel
+          readOnly
           assetId={asset.id}
           assetName={asset.name}
           currency={asset.currency}

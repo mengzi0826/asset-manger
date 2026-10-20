@@ -167,6 +167,17 @@ function migrateSchema(db: Database.Database) {
     last_import_at TEXT
   )`);
   db.prepare("INSERT OR IGNORE INTO history_integrity (id, reliable_from) VALUES (1, ?)").run(nowCn());
+  db.exec(`CREATE TABLE IF NOT EXISTS interest_accrual (
+    date TEXT NOT NULL,
+    bucket TEXT NOT NULL CHECK (bucket IN ('cny', 'hkd', 'usd', 'crypto')),
+    annual_rate REAL NOT NULL,
+    principal REAL NOT NULL,
+    interest REAL NOT NULL,
+    asset_id INTEGER NOT NULL,
+    event_id INTEGER,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (date, bucket)
+  )`);
   migratedConnections.add(db);
 }
 

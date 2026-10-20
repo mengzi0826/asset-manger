@@ -20,7 +20,8 @@ const allowedTypes: PortfolioEventType[] = [
   "security_buy",
   "security_sell",
   "security_dividend",
-  "security_liquidation"
+  "security_liquidation",
+  "interest_income"
 ];
 
 export async function GET(req: Request) {

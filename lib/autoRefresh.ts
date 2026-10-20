@@ -1,5 +1,6 @@
 import "server-only";
 import { refreshRates } from "./fx";
+import { accrueTodayInterest } from "./interest";
 import { refreshStockPrices } from "./stocks";
 
 const AUTO_REFRESH_INTERVAL_MS = 60 * 1000;
@@ -14,6 +15,7 @@ async function runAutoRefreshTick(): Promise<void> {
   if (tickInFlight) return;
   tickInFlight = true;
   try {
+    accrueTodayInterest();
     await refreshRates(false);
     await refreshStockPrices({ force: false });
   } catch (e: any) {

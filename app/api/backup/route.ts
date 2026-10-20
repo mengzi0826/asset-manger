@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const db = getDB();
   const payload = {
-    version: 5,
+    version: 6,
     exported_at: nowCn(),
     category: db.prepare("SELECT * FROM category ORDER BY id").all(),
     account: db.prepare("SELECT * FROM account ORDER BY id").all(),
@@ -30,7 +30,8 @@ export async function GET() {
         "SELECT * FROM asset_valuation_daily ORDER BY date, base_currency, asset_id"
       )
       .all(),
-    stock_price_daily: db.prepare("SELECT * FROM stock_price_daily ORDER BY asset_id, date").all()
+    stock_price_daily: db.prepare("SELECT * FROM stock_price_daily ORDER BY asset_id, date").all(),
+    interest_accrual: db.prepare("SELECT * FROM interest_accrual ORDER BY date, bucket").all()
   };
   const filename = `asset-backup-${todayCn()}.json`;
   return new NextResponse(JSON.stringify(payload, null, 2), {
@@ -59,7 +60,8 @@ const importSchema = z.object({
   portfolio_event_leg: z.array(z.any()).optional(),
   portfolio_snapshot: z.array(z.any()).optional(),
   asset_valuation_daily: z.array(z.any()).optional(),
-  stock_price_daily: z.array(z.any()).optional()
+  stock_price_daily: z.array(z.any()).optional(),
+  interest_accrual: z.array(z.any()).optional()
 });
 
 export async function POST(req: Request) {
@@ -72,7 +74,7 @@ export async function POST(req: Request) {
     const tx = db.transaction(() => {
       if (mode === "replace") {
         db.exec(
-          "DELETE FROM stock_refresh_log; DELETE FROM stock_price_daily; DELETE FROM asset_valuation_daily; DELETE FROM portfolio_event_leg; DELETE FROM portfolio_event; DELETE FROM asset_change; DELETE FROM portfolio_snapshot; DELETE FROM asset; DELETE FROM account; DELETE FROM fx_rate_history; DELETE FROM fx_rate; DELETE FROM setting;"
+          "DELETE FROM stock_refresh_log; DELETE FROM stock_price_daily; DELETE FROM interest_accrual; DELETE FROM asset_valuation_daily; DELETE FROM portfolio_event_leg; DELETE FROM portfolio_event; DELETE FROM asset_change; DELETE FROM portfolio_snapshot; DELETE FROM asset; DELETE FROM account; DELETE FROM fx_rate_history; DELETE FROM fx_rate; DELETE FROM setting;"
         );
       }
       if (parsed.category) {
@@ -257,6 +259,18 @@ export async function POST(req: Request) {
             metadata: null,
             ...r
           });
+      }
+      if (parsed.interest_accrual) {
+        const stmt = db.prepare(
+          `INSERT INTO interest_accrual
+           (date, bucket, annual_rate, principal, interest, asset_id, event_id, created_at)
+           VALUES (@date, @bucket, @annual_rate, @principal, @interest, @asset_id, @event_id, @created_at)
+           ON CONFLICT(date, bucket) DO UPDATE SET
+             annual_rate=excluded.annual_rate, principal=excluded.principal,
+             interest=excluded.interest, asset_id=excluded.asset_id,
+             event_id=excluded.event_id, created_at=excluded.created_at`
+        );
+        for (const r of parsed.interest_accrual) stmt.run({ event_id: null, ...r });
       }
       if (parsed.stock_price_daily) {
         const stmt = db.prepare(

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSetting, setSetting, removeSetting } from "@/lib/db";
+import { getInterestStatus, saveInterestRates, type InterestBucketId } from "@/lib/interest";
 import {
   SETTING_JUHE_FX_APPKEY,
   SETTING_JUHE_STOCK_APPKEY,
@@ -13,7 +14,15 @@ export const dynamic = "force-dynamic";
 const patchSchema = z.object({
   base_currency: z.string().trim().length(3).optional(),
   juhe_fx_appkey: z.union([z.string().trim().min(1), z.null()]).optional(),
-  juhe_stock_appkey: z.union([z.string().trim().min(1), z.null()]).optional()
+  juhe_stock_appkey: z.union([z.string().trim().min(1), z.null()]).optional(),
+  interest_rates: z
+    .object({
+      cny: z.number(),
+      hkd: z.number(),
+      usd: z.number(),
+      crypto: z.number()
+    })
+    .optional()
 });
 
 export async function GET() {
@@ -44,6 +53,9 @@ export async function PATCH(req: Request) {
       } else {
         setSetting(SETTING_JUHE_STOCK_APPKEY, parsed.juhe_stock_appkey);
       }
+    }
+    if (parsed.interest_rates) {
+      saveInterestRates(parsed.interest_rates as Record<InterestBucketId, number>);
     }
     return NextResponse.json({
       base_currency: (getSetting("base_currency") ?? "CNY").toUpperCase(),

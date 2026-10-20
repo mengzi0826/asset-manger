@@ -10,7 +10,9 @@ import {
   listSecuritiesForView
 } from "@/lib/stocks";
 import { nextStockAutoRefreshIso } from "@/lib/time";
+import { accrueTodayInterest, getInterestStatus } from "@/lib/interest";
 import { FxManager } from "./_components/FxManager";
+import { InterestRateForm } from "./_components/InterestRateForm";
 import { JuheApiKeyForm } from "./_components/JuheApiKeyForm";
 import { StockManager } from "./_components/StockManager";
 import { BaseCurrencyPicker } from "../_components/BaseCurrencyPicker";
@@ -21,6 +23,8 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage() {
   kickoffRatesRefresh();
   kickoffStockPricesRefresh();
+  accrueTodayInterest();
+  const interest = getInterestStatus();
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   const rates = listRates();
   const stockItems = listSecuritiesForView();
@@ -34,7 +38,7 @@ export default async function SettingsPage() {
     <div className="space-y-6">
       <PageHeader title="设置" />
       <div className="settings-layout">
-        <nav className="settings-nav" aria-label="设置分区"><a href="#preferences">显示偏好</a><a href="#keys">数据来源</a><a href="#fx">汇率管理</a><a href="#stocks">股票行情</a><a href="#backup">备份与恢复</a></nav>
+        <nav className="settings-nav" aria-label="设置分区"><a href="#preferences">显示偏好</a><a href="#interest">利息收入</a><a href="#keys">数据来源</a><a href="#fx">汇率管理</a><a href="#stocks">股票行情</a><a href="#backup">备份与恢复</a></nav>
         <div className="settings-content">
       <section id="preferences" aria-label="显示偏好">
       <div className="card">
@@ -51,6 +55,7 @@ export default async function SettingsPage() {
       </div>
 
       </section>
+      <section id="interest" aria-label="利息收入"><InterestRateForm buckets={interest} /></section>
       <section id="keys" aria-label="数据来源"><JuheApiKeyForm fx={juheFxState} stock={juheStockState} /></section>
 
       <section id="fx" aria-label="汇率管理"><FxManager rates={rates} supported={[...SUPPORTED_CURRENCIES]} /></section>

@@ -33,6 +33,7 @@ import { formatDate, formatMoney, formatPercent, formatCnDateTime } from "@/lib/
 import { getJuheFxAppKey, getJuheStockAppKey } from "@/lib/juheKeys";
 import { isWeekendBeijing, todayCn, shouldRefreshFxEvery8h, shouldRefreshStocksBy10And14 } from "@/lib/time";
 import { DataFreshnessBanner } from "./_components/DataFreshness";
+import { accrueTodayInterest } from "@/lib/interest";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +41,7 @@ export default async function DashboardPage() {
   // 后台刷新：不阻塞首屏。首次访问时会显示旧/空数据，下次访问即更新。
   kickoffRatesRefresh();
   kickoffStockPricesRefresh();
+  accrueTodayInterest();
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   const valuation = valueAll(baseCurrency);
   ensureTodaySnapshot(baseCurrency);
@@ -394,12 +396,18 @@ function RecentChangeRow({
     asset_name: string | null;
     base_value_cny: number | null;
     created_at: string;
+    field_changes: string | null;
   };
 }) {
+  let interest = false;
+  if (c.field_changes) {
+    try { interest = JSON.parse(c.field_changes)?.cash_flow_type?.to === "interest"; } catch { /* 损坏记录仍按普通变动展示 */ }
+  }
   return (
     <>
-      <ActionDot action={c.action} />
-      <span className="font-medium text-ink-800">{c.asset_name ?? "-"}</span>
+      <ActionDot action={interest ? "create" : c.action} />
+      <span className="font-medium text-ink-800">{interest ? "利息收入" : c.asset_name ?? "-"}</span>
+      {interest && <span className="text-ink-500">{c.asset_name}</span>}
       {c.base_value_cny != null && (
         <span
           className={`tabular ${

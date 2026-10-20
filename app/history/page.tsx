@@ -5,6 +5,7 @@ import { ensureTodaySnapshot, listChanges, listSnapshots } from "@/lib/history";
 import { HistoryChart } from "@/components/charts/HistoryChart";
 import { buildNetWorthHistory } from "@/lib/netWorthHistory";
 import { formatDate, formatMoney, formatPercent, formatCnDateTime } from "@/lib/utils";
+import { accrueTodayInterest } from "@/lib/interest";
 import { RecordSnapshotButton } from "./_components/RecordSnapshotButton";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +19,8 @@ const FIELD_LABELS: Record<string, string> = {
   cash_flow_type: "现金操作",
   cash_flow_amount: "现金流金额",
   cash_flow_reason: "现金流原因",
+  interest_annual_rate: "年化利率",
+  interest_principal: "计息本金",
   current_price: "当前价",
   amount: "金额",
   annual_rate: "年化",
@@ -28,6 +31,7 @@ const FIELD_LABELS: Record<string, string> = {
 
 export default async function HistoryPage() {
   kickoffRatesRefresh();
+  accrueTodayInterest();
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   ensureTodaySnapshot(baseCurrency);
   const snapshots = listSnapshots(baseCurrency, 3650);
@@ -85,19 +89,21 @@ export default async function HistoryPage() {
                 const fieldChanges: Record<string, { from: unknown; to: unknown }> = c.field_changes
                   ? JSON.parse(c.field_changes)
                   : {};
+                const flowType = fieldChanges.cash_flow_type?.to;
+                const isInterest = flowType === "interest";
                 return (
                   <li key={c.id} className="py-3">
                     <div className="flex flex-wrap items-center gap-2.5 text-[14px]">
                       <span
                         className={`chip ${
-                          c.action === "create"
+                          isInterest || c.action === "create"
                             ? "chip-gain"
                             : c.action === "delete"
                               ? "chip-loss"
                               : "chip-info"
                         }`}
                       >
-                        {c.action === "create" ? "新增" : c.action === "delete" ? "删除" : "修改"}
+                        {isInterest ? "利息收入" : c.action === "create" ? "新增" : c.action === "delete" ? "删除" : "修改"}
                       </span>
                       <span className="font-medium text-ink-900">
                         {c.asset_name ?? `#${c.asset_id ?? "-"}`}
@@ -167,7 +173,8 @@ function SummaryCell({
 function renderValue(v: unknown, field: string): string {
   if (v == null || v === "") return "—";
   if (field === "start_date" || field === "maturity_date") return formatDate(String(v));
-  if (field === "cash_flow_type") return v === "deposit" ? "入金" : v === "expense" ? "消费" : String(v);
+  if (field === "cash_flow_type") return v === "deposit" ? "入金" : v === "expense" ? "消费" : v === "interest" ? "利息收入" : String(v);
+  if (field === "interest_annual_rate" && typeof v === "number") return `${(v * 100).toFixed(2)}%`;
   if (field === "dividend_amount" && typeof v === "number") return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
   if (typeof v === "number") return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
   return String(v);

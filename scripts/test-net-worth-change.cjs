@@ -147,6 +147,27 @@ test("legacy zero opening value with nonzero position is not fabricated profit",
     [event("asset_created", [leg(2, "security", null, 10, 10)], { grossAmount: 0, metadata: { category_code: "securities" } })]);
   assert.equal(amount(r, "securities"), 0); assert.equal(amount(r, "unclassified"), 100);
 });
+test("interest income stays separate from deposits and cash residuals", () => {
+  const r = calculate([row(1, "cash", 1000), row(2, "cash", 0)], [row(1, "cash", 1000), row(2, "cash", 2.74)], [
+    event("interest_income", [leg(2, "cash", 2.74)], { metadata: { bucket: "cny" }, grossAmount: 2.74 })
+  ]);
+  assert.equal(amount(r, "interest"), 2.74);
+  assert.equal(amount(r, "deposit"), 0);
+  assert.equal(amount(r, "unclassified"), 0);
+  assert.equal(r.partial, false);
+  assert.deepEqual(r.items.find(item => item.kind === "interest").details, [{ label: "人民币利息", amount: 2.74 }]);
+});
+test("crypto interest is not treated as other revaluation", () => {
+  const usd = (native) => row(1, "crypto", native, { currency: "USD", fx_rate: 7, base_value: native * 7 });
+  const r = calculate([usd(1000)], [usd(1001)], [
+    event("interest_income", [leg(1, "asset", 1)], { currency: "USD", metadata: { bucket: "crypto" } })
+  ]);
+  assert.equal(amount(r, "interest"), 7);
+  assert.equal(amount(r, "other"), 0);
+  assert.equal(amount(r, "fx"), 0);
+  assert.equal(r.partial, false);
+  assert.equal(r.items.find(item => item.kind === "interest").details[0].label, "加密货币利息");
+});
 test("classification changes from asset to debt remain manual calibration", () => {
   const r = calculate([row(1, "cash", 100)], [row(1, "liability", 100)], [event("manual_adjustment", [leg(1, "asset")], {
     metadata: { native_value_before: 100, native_value_after: 100, category_before: "cash", category_after: "liability", currency_before: "CNY", currency_after: "CNY" }
@@ -195,4 +216,16 @@ test("batch history reads every event and retains the off-chart baseline", () =>
   assert.equal(history[0].change.partial, false);
   db.close();
 });
+const mathFile = path.resolve(__dirname, "../lib/interestMath.ts");
+const mathModule = new Module(mathFile, module);
+mathModule._compile(ts.transpileModule(fs.readFileSync(mathFile, "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+}).outputText, mathFile);
+const { dailyInterest } = mathModule.exports;
+assert.equal(dailyInterest(10000, 0.0365), 1);
+assert.equal(dailyInterest(95281, 0.02), 5.22);
+assert.equal(dailyInterest(100, 0), 0);
+assert.equal(dailyInterest(0, 0.05), 0);
+checks++;
+console.log("✓ daily interest rounds to cents");
 console.log(`${checks} attribution checks passed.`);

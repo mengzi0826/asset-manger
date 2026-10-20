@@ -177,7 +177,7 @@ export function listChanges(limit = 200): AssetChange[] {
 
 export interface CashFlowEntry {
   id: number;
-  type: "deposit" | "expense";
+  type: "deposit" | "expense" | "interest";
   /** 带方向的原币金额：入金为正，消费为负。 */
   amount: number;
   reason: string;
@@ -195,7 +195,7 @@ export function listCashFlowEntries(assetId: number, limit = 50): CashFlowEntry[
          AND CASE
                WHEN json_valid(field_changes)
                THEN json_extract(field_changes, '$.cash_flow_type.to')
-             END IN ('deposit', 'expense')
+             END IN ('deposit', 'expense', 'interest')
        ORDER BY created_at DESC, id DESC
        LIMIT ?`
     )
@@ -208,7 +208,7 @@ export function listCashFlowEntries(assetId: number, limit = 50): CashFlowEntry[
       const type = changes.cash_flow_type?.to;
       const amount = Number(changes.cash_flow_amount?.to);
       const reason = String(changes.cash_flow_reason?.to ?? "").trim();
-      if ((type !== "deposit" && type !== "expense") || !Number.isFinite(amount) || !reason) continue;
+      if ((type !== "deposit" && type !== "expense" && type !== "interest") || !Number.isFinite(amount) || !reason) continue;
       entries.push({ id: row.id, type, amount, reason, createdAt: row.created_at });
     } catch {
       /* 忽略损坏的历史记录，不影响现金资产页渲染 */

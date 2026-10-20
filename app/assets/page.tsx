@@ -6,6 +6,7 @@ import { newAssetHref } from "@/lib/assetsNav";
 import { valueAll } from "@/lib/valuation";
 import { kickoffRatesRefresh } from "@/lib/fx";
 import { kickoffStockPricesRefresh } from "@/lib/stocks";
+import { accrueTodayInterest } from "@/lib/interest";
 import { AccountManager } from "./_components/AccountManager";
 import { CategoryTabs } from "./_components/CategoryTabs";
 import { AssetsTable } from "./_components/AssetsTable";
@@ -19,6 +20,7 @@ interface PageProps {
 export default async function AssetsPage({ searchParams }: PageProps) {
   kickoffRatesRefresh();
   kickoffStockPricesRefresh();
+  accrueTodayInterest();
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   const db = getDB();
   const categories = db

@@ -37,7 +37,8 @@ const EVENT_LABELS: Record<PortfolioEventType, string> = {
   security_buy: "证券买入",
   security_sell: "证券卖出",
   security_dividend: "证券分红",
-  security_liquidation: "证券清仓"
+  security_liquidation: "证券清仓",
+  interest_income: "利息收入"
 };
 
 function round(value: number | null | undefined, digits = 2): number | null {
@@ -601,6 +602,7 @@ export function buildAiMessages(action: AiAction, message?: string) {
     "rollingWindows 是程序预先计算的滚动现金流汇总；eventCoverageComplete 为 false 时不得把 count=0 或金额 0 解释为没有消费或入金。",
     "answerFacts 是程序生成的权威结论；回答相关问题时直接使用其中的 statement、日期和金额，不得合并、改写或猜测不同数据源的覆盖日期。",
     "被问到历史分析为何不可用时，必须引用 dataQuality 中事件、逐资产估值和汇率历史的实际起止日期，说明“表已存在”不等于已有足够历史观测。",
+    "interest_income 是按设置年化利率入账的利息收入，不得并入入金或投资收益；没有该事件时不得把余额差额说成利息。",
     "不得编造行情、新闻、收益或缺失历史。数据不足时直接说明。",
     "避免 Markdown 表格，使用简短标题和项目符号，内容清晰但不过度冗长。"
   ].join("\n");

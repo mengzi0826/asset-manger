@@ -203,7 +203,7 @@ export function AccountManager({
                               <div className="truncate text-[12px] text-ink-400">
                                 {a.institution}
                                 {a.institution && a.notes && " · "}
-                                {a.notes}
+                                {a.notes?.startsWith("interest:") ? "按设置年化每日入账" : a.notes}
                               </div>
                             )}
                           </div>

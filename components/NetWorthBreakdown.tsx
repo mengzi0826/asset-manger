@@ -25,9 +25,21 @@ export function NetWorthBreakdown({ change, currency, compact = false }: {
       {change.items.length ? (
         <ul className={compact ? "space-y-1.5 border-t border-hair pt-2" : "grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3"}>
           {change.items.map(item => (
-            <li key={item.kind} className={`flex items-center justify-between gap-4 ${compact ? "" : "rounded-md bg-canvas-sunk px-3 py-2"}`}>
-              <span className={item.kind === "unclassified" ? "text-gold-700" : "text-ink-600"}>{item.label}</span>
-              <ChangeAmount value={item.amount} currency={currency} />
+            <li key={item.kind} className={compact ? "" : "rounded-md bg-canvas-sunk px-3 py-2"}>
+              <div className="flex items-center justify-between gap-4">
+                <span className={item.kind === "unclassified" ? "text-gold-700" : "text-ink-600"}>{item.label}</span>
+                <ChangeAmount value={item.amount} currency={currency} />
+              </div>
+              {item.details?.length ? (
+                <ul className="mt-1.5 space-y-1 border-t border-hair/80 pt-1.5">
+                  {item.details.map(detail => (
+                    <li key={detail.label} className="flex items-center justify-between gap-4 text-[12px]">
+                      <span className="text-ink-400">{detail.label}</span>
+                      <ChangeAmount value={detail.amount} currency={currency} />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </li>
           ))}
         </ul>

@@ -2,13 +2,19 @@ import type { AssetValuationDaily, PortfolioSnapshot } from "./db";
 import type { PortfolioEvent } from "./portfolioEvents";
 
 export const CHANGE_LABELS = {
-  deposit: "入金", expense: "消费", dividend: "分红到账", fx: "汇率变化",
+  deposit: "入金", expense: "消费", dividend: "分红到账", interest: "利息收入", fx: "汇率变化",
   securities: "证券价格变动", other: "其他资产估值变化", liability: "负债变化",
   created: "新增资产", deleted: "删除资产", adjustment: "手动校准",
   unlinked_trade: "未关联现金的交易", unclassified: "未归因"
 } as const;
 export type ChangeKind = keyof typeof CHANGE_LABELS;
-export interface ChangeItem { kind: ChangeKind; label: string; amount: number }
+export interface ChangeDetail { label: string; amount: number }
+export interface ChangeItem { kind: ChangeKind; label: string; amount: number; details?: ChangeDetail[] }
+
+const INTEREST_LABELS: Record<string, string> = {
+  cny: "人民币利息", hkd: "港币利息", usd: "美元利息", crypto: "加密货币利息"
+};
+const INTEREST_ORDER = ["cny", "hkd", "usd", "crypto"];
 export interface NetWorthChange {
   from: string | null;
   to: string;
@@ -51,6 +57,7 @@ export function calculateNetWorthChange(input: {
   if (!previous) return result;
   const totals = new Map<ChangeKind, number>();
   const add = (kind: ChangeKind, amount: number) => totals.set(kind, (totals.get(kind) ?? 0) + amount);
+  const interestParts = new Map<string, { label: string; amount: number }>();
   const notes = new Set<string>();
   const incomplete = (note: string) => { result.partial = true; notes.add(note); };
   const reliable = reliableFrom != null && reliableFrom <= previous.created_at;
@@ -122,6 +129,18 @@ export function calculateNetWorthChange(input: {
       if (event.type === "security_dividend") for (const leg of event.legs.filter(leg => leg.role === "security")) {
         const row = before.get(leg.assetId!) ?? after.get(leg.assetId!);
         if (!row || row.unit_price === row.unit_cost) blocked.add(leg.assetId!);
+      }
+    } else if (event.type === "interest_income") {
+      if (!event.legs.length || event.legs.some(leg => !finite(leg.amountDelta))) { fail(); continue; }
+      const bucket = typeof event.metadata?.bucket === "string" ? event.metadata.bucket : event.currency;
+      const label = INTEREST_LABELS[bucket] ?? `${event.currency}利息`;
+      for (const leg of event.legs) {
+        const base = leg.amountDelta! * rate;
+        add("interest", base);
+        affect(leg.assetId!, leg.amountDelta!);
+        const part = interestParts.get(bucket) ?? { label, amount: 0 };
+        part.amount += base;
+        interestParts.set(bucket, part);
       }
     } else if (["security_buy", "security_sell", "security_liquidation"].includes(event.type)) {
       const security = event.legs.filter(leg => leg.role === "security");
@@ -215,6 +234,18 @@ export function calculateNetWorthChange(input: {
   let classifiedCents = 0;
   for (const [kind, label] of Object.entries(CHANGE_LABELS)) {
     if (kind === "unclassified") continue;
+    if (kind === "interest") {
+      const details = [...interestParts.entries()]
+        .sort((a, b) => INTEREST_ORDER.indexOf(a[0]) - INTEREST_ORDER.indexOf(b[0]))
+        .map(([, part]) => ({ label: part.label, amount: cents(part.amount) / 100 }))
+        .filter(part => cents(part.amount) !== 0);
+      const amountCents = details.reduce((sum, part) => sum + cents(part.amount), 0);
+      if (amountCents !== 0) {
+        result.items.push({ kind, label, amount: amountCents / 100, details });
+        classifiedCents += amountCents;
+      }
+      continue;
+    }
     const amount = cents(totals.get(kind as ChangeKind) ?? 0);
     if (amount !== 0) { result.items.push({ kind: kind as ChangeKind, label, amount: amount / 100 }); classifiedCents += amount; }
   }
