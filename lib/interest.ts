@@ -151,9 +151,49 @@ function ensureInterestAccounts(): boolean {
   return created;
 }
 
-function interestMetadata(bucket: InterestBucket, annualRate: number, principal: number) {
+function nextCalendarDay(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const utc = new Date(Date.UTC(y, m - 1, d));
+  utc.setUTCDate(utc.getUTCDate() + 1);
+  const month = String(utc.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(utc.getUTCDate()).padStart(2, "0");
+  return `${utc.getUTCFullYear()}-${month}-${day}`;
+}
+
+function accrualInstant(date: string, today: string): string {
+  return date === today ? nowCn() : `${date}T12:00:00+08:00`;
+}
+
+function lastAccrualDate(bucket: InterestBucketId): string | null {
+  const row = getDB()
+    .prepare("SELECT MAX(date) AS date FROM interest_accrual WHERE bucket = ?")
+    .get(bucket) as { date: string | null };
+  return row.date;
+}
+
+/** 上次入账之后到今天之间尚未入账的日期。没有历史入账时只处理今天，不回补功能上线前的日子。 */
+function pendingAccrualDates(bucket: InterestBucket, today: string): string[] {
+  const rate = readRate(bucket);
+  const last = lastAccrualDate(bucket.id);
+  const dates: string[] = [];
+  if (last && last < today && rate > 0) {
+    for (let date = nextCalendarDay(last); date < today; date = nextCalendarDay(date)) {
+      if (!readAccrual(date, bucket.id)) dates.push(date);
+    }
+  }
+  const todayRow = readAccrual(today, bucket.id);
+  if (!todayRow) {
+    if (rate > 0) dates.push(today);
+  } else if (todayRow.annual_rate !== rate) {
+    dates.push(today);
+  }
+  return dates;
+}
+
+function interestMetadata(bucket: InterestBucket, annualRate: number, principal: number, date: string) {
   return {
     bucket: bucket.id,
+    accrual_date: date,
     annual_rate: annualRate,
     principal,
     day_count: INTEREST_DAY_COUNT,
@@ -162,15 +202,15 @@ function interestMetadata(bucket: InterestBucket, annualRate: number, principal:
   };
 }
 
-function writeInterestEvent(asset: AssetRow, bucket: InterestBucket, interest: number, amountAfter: number, annualRate: number, principal: number) {
+function writeInterestEvent(asset: AssetRow, bucket: InterestBucket, interest: number, amountAfter: number, annualRate: number, principal: number, at: string, date: string) {
   return recordPortfolioEvent({
     type: "interest_income",
     currency: asset.currency,
     grossAmount: interest,
     reason: "利息收入",
     source: "system",
-    occurredAt: nowCn(),
-    metadata: interestMetadata(bucket, annualRate, principal),
+    occurredAt: at,
+    metadata: interestMetadata(bucket, annualRate, principal, date),
     legs: [
       {
         assetId: asset.id,
@@ -184,15 +224,15 @@ function writeInterestEvent(asset: AssetRow, bucket: InterestBucket, interest: n
   });
 }
 
-function applyBalance(asset: AssetRow, nextAmount: number, signed: number, annualRate: number, principal: number) {
+function applyBalance(asset: AssetRow, nextAmount: number, signed: number, annualRate: number, principal: number, at: string) {
   const db = getDB();
-  const now = nowCn();
-  db.prepare("UPDATE asset SET amount = ?, updated_at = ? WHERE id = ?").run(nextAmount, now, asset.id);
+  db.prepare("UPDATE asset SET amount = ?, updated_at = ? WHERE id = ?").run(nextAmount, nowCn(), asset.id);
   const after = db.prepare("SELECT * FROM asset WHERE id = ?").get(asset.id) as AssetRow;
   logAssetChange({
     action: "update",
     before: asset,
     after,
+    createdAt: at,
     extraChanges: {
       cash_flow_type: { from: null, to: "interest" },
       cash_flow_amount: { from: 0, to: signed },
@@ -204,31 +244,35 @@ function applyBalance(asset: AssetRow, nextAmount: number, signed: number, annua
   return after;
 }
 
-function creditInterest(asset: AssetRow, bucket: InterestBucket, interest: number, annualRate: number, principal: number) {
+function creditInterest(asset: AssetRow, bucket: InterestBucket, interest: number, annualRate: number, principal: number, at: string, date: string) {
   const nextAmount = moneyCents((asset.amount ?? 0) + interest) / 100;
-  const after = applyBalance(asset, nextAmount, interest, annualRate, principal);
-  return { after, nextAmount, eventId: writeInterestEvent(after, bucket, interest, nextAmount, annualRate, principal) };
+  const after = applyBalance(asset, nextAmount, interest, annualRate, principal, at);
+  return { after, nextAmount, eventId: writeInterestEvent(after, bucket, interest, nextAmount, annualRate, principal, at, date) };
 }
 
-function applyBucket(bucket: InterestBucket, today: string): boolean {
+function applyBucket(bucket: InterestBucket, date: string, today: string): boolean {
   const db = getDB();
   const rate = readRate(bucket);
-  const existing = readAccrual(today, bucket.id);
+  const existing = readAccrual(date, bucket.id);
   const asset = findInterestAsset(bucket);
   if (!asset) throw new Error(`缺少利息账户：${bucket.label}`);
+  const at = accrualInstant(date, today);
 
   if (!existing) {
     if (!(rate > 0)) return false;
     const principal = principalOf(bucket);
     const interest = dailyInterest(principal, rate);
-    const posted = interest > 0 ? creditInterest(asset, bucket, interest, rate, principal) : null;
+    const posted = interest > 0 ? creditInterest(asset, bucket, interest, rate, principal, at, date) : null;
     db.prepare(
       `INSERT INTO interest_accrual
        (date, bucket, annual_rate, principal, interest, asset_id, event_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(today, bucket.id, rate, principal, interest, asset.id, posted?.eventId ?? null, nowCn());
+    ).run(date, bucket.id, rate, principal, interest, asset.id, posted?.eventId ?? null, nowCn());
     return interest > 0;
   }
+
+  // 错过的日期只补一次。当天改利率才重算，不改写已经补上的历史利息。
+  if (date !== today) return false;
 
   const tracked = db.prepare("SELECT id FROM asset WHERE id = ?").get(existing.asset_id) as { id: number } | undefined;
   if (existing.annual_rate === rate && tracked) return false;
@@ -237,12 +281,12 @@ function applyBucket(bucket: InterestBucket, today: string): boolean {
     if (existing.event_id != null) db.prepare("DELETE FROM portfolio_event WHERE id = ?").run(existing.event_id);
     const principal = principalOf(bucket);
     const interest = dailyInterest(principal, rate);
-    const posted = interest > 0 ? creditInterest(asset, bucket, interest, rate, principal) : null;
+    const posted = interest > 0 ? creditInterest(asset, bucket, interest, rate, principal, at, date) : null;
     db.prepare(
       `UPDATE interest_accrual
        SET annual_rate = ?, principal = ?, interest = ?, asset_id = ?, event_id = ?
        WHERE date = ? AND bucket = ?`
-    ).run(rate, principal, interest, asset.id, posted?.eventId ?? null, today, bucket.id);
+    ).run(rate, principal, interest, asset.id, posted?.eventId ?? null, date, bucket.id);
     return interest > 0;
   }
 
@@ -252,11 +296,11 @@ function applyBucket(bucket: InterestBucket, today: string): boolean {
   if (delta !== 0) {
     const fresh = db.prepare("SELECT * FROM asset WHERE id = ?").get(asset.id) as AssetRow;
     const nextAmount = moneyCents((fresh.amount ?? 0) + delta) / 100;
-    const after = applyBalance(fresh, nextAmount, delta, rate, existing.principal);
+    const after = applyBalance(fresh, nextAmount, delta, rate, existing.principal, at);
     if (interest > 0 && eventId != null) {
       db.prepare("UPDATE portfolio_event SET gross_amount = ?, metadata = ? WHERE id = ?").run(
         interest,
-        JSON.stringify(interestMetadata(bucket, rate, existing.principal)),
+        JSON.stringify(interestMetadata(bucket, rate, existing.principal, date)),
         eventId
       );
       db.prepare("UPDATE portfolio_event_leg SET amount_delta = ?, amount_after = ? WHERE event_id = ?").run(
@@ -265,7 +309,7 @@ function applyBucket(bucket: InterestBucket, today: string): boolean {
         eventId
       );
     } else if (interest > 0) {
-      eventId = writeInterestEvent(after, bucket, interest, nextAmount, rate, existing.principal);
+      eventId = writeInterestEvent(after, bucket, interest, nextAmount, rate, existing.principal, at, date);
     } else if (eventId != null) {
       db.prepare("DELETE FROM portfolio_event WHERE id = ?").run(eventId);
       eventId = null;
@@ -273,22 +317,17 @@ function applyBucket(bucket: InterestBucket, today: string): boolean {
   }
   db.prepare(
     "UPDATE interest_accrual SET annual_rate = ?, interest = ?, event_id = ? WHERE date = ? AND bucket = ?"
-  ).run(rate, interest, eventId, today, bucket.id);
+  ).run(rate, interest, eventId, date, bucket.id);
   return delta !== 0;
 }
 
 export function interestWorkPending(): boolean {
   if (INTEREST_BUCKETS.some((bucket) => !findInterestAsset(bucket))) return true;
   const today = todayCn();
-  return INTEREST_BUCKETS.some((bucket) => {
-    const rate = readRate(bucket);
-    const row = readAccrual(today, bucket.id);
-    if (!row) return rate > 0;
-    return row.annual_rate !== rate;
-  });
+  return INTEREST_BUCKETS.some((bucket) => pendingAccrualDates(bucket, today).length > 0);
 }
 
-/** 确保四个利息账户存在，并按当日年化利率入账一次。无余额变化时不写快照。 */
+/** 确保四个利息账户存在，并补上停机期间到今天的利息。无余额变化时不写快照。 */
 export function accrueTodayInterest(): void {
   if (accruing || !interestWorkPending()) return;
   accruing = true;
@@ -297,7 +336,11 @@ export function accrueTodayInterest(): void {
     const today = todayCn();
     db.transaction(() => {
       let changed = ensureInterestAccounts();
-      for (const bucket of INTEREST_BUCKETS) changed = applyBucket(bucket, today) || changed;
+      for (const bucket of INTEREST_BUCKETS) {
+        for (const date of pendingAccrualDates(bucket, today)) {
+          changed = applyBucket(bucket, date, today) || changed;
+        }
+      }
       if (changed) recordSnapshot(getSetting("base_currency") ?? "CNY");
     })();
   } finally {

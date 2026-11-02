@@ -143,7 +143,7 @@ export function JuheApiKeyForm({
           </div>
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <label htmlFor="input-stock-appkey" className="label">股票价格（沪深 / 港股 / 美股）</label>
+              <label htmlFor="input-stock-appkey" className="label">股票 AppKey（已停用）</label>
               {stock.source === "database" && (
                 <button
                   type="button"
@@ -165,7 +165,7 @@ export function JuheApiKeyForm({
               onChange={(e) => setStockInput(e.target.value)}
             />
             <p className="mt-1 text-[12px] text-ink-400">
-              每天北京时间 10:00、14:00 后进入应用各最多自动拉取一次。{keyHelp(stock, "JUHE_STOCK_APPKEY")}
+              股价已改走腾讯财经公开行情，不再读取这枚 Key。留着只为兼容旧设置，可以清除。{keyHelp(stock, "JUHE_STOCK_APPKEY")}
             </p>
           </div>
           <button className="btn-primary" disabled={isSaving || pending} type="submit">

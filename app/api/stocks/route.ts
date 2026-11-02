@@ -6,8 +6,12 @@ import {
 } from "@/lib/stocks";
 import { nextStockAutoRefreshIso } from "@/lib/time";
 
+function nextRefreshAt(): string {
+  return nextStockAutoRefreshIso(getLastStocksRefreshAt());
+}
+
 export const dynamic = "force-dynamic";
-/** 多标的串行拉取 Juhe，易超过默认 Serverless 上限；部署到 Vercel 等时延长可执行时间 */
+/** 腾讯批量行情一次返回全部持仓；保留较长执行时间，避免手动刷新被平台截断。 */
 export const maxDuration = 300;
 
 export async function GET(req: Request) {
@@ -36,7 +40,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       items: listSecuritiesForView(),
       last_refreshed_at: getLastStocksRefreshAt(),
-      next_refresh_at: nextStockAutoRefreshIso(),
+      next_refresh_at: nextRefreshAt(),
       refresh: null
     });
   } catch (e: unknown) {
@@ -53,11 +57,11 @@ export async function GET(req: Request) {
         error: message || "服务器错误",
         items: itemsOut,
         last_refreshed_at: refresh ? getLastStocksRefreshAt() : null,
-        next_refresh_at: nextStockAutoRefreshIso(),
+        next_refresh_at: nextRefreshAt(),
         refresh: refresh
           ? {
               last_refreshed_at: getLastStocksRefreshAt(),
-              next_refresh_at: nextStockAutoRefreshIso(),
+              next_refresh_at: nextRefreshAt(),
               skipped: null,
               updated_count: 0,
               failed_count: 0,

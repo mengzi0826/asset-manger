@@ -7,7 +7,7 @@ import {
 } from "./db";
 import { convert, getRate } from "./fx";
 import { computeAssetValue, valueAll } from "./valuation";
-import { nowCn, todayCn } from "./time";
+import { isUsQuoteDateInDisplayWindow, nowCn, todayCn } from "./time";
 import { parseStockSymbol } from "./stocks";
 
 /**
@@ -100,6 +100,8 @@ export function logAssetChange(params: {
   before?: AssetRow | null;
   after?: AssetRow | null;
   extraChanges?: Record<string, { from: unknown; to: unknown }>;
+  /** 业务归属时间。补记停机期间的利息时用对应北京日，而不是醒来的时刻。 */
+  createdAt?: string;
 }) {
   const { action, before, after, extraChanges } = params;
   const db = getDB();
@@ -164,7 +166,7 @@ export function logAssetChange(params: {
     fieldChanges ? JSON.stringify(fieldChanges) : extraChanges ? JSON.stringify(extraChanges) : null,
     JSON.stringify({ ...target, category_code: category?.code ?? null }),
     valueCny,
-    nowCn()
+    params.createdAt ?? nowCn()
   );
 }
 
@@ -491,7 +493,8 @@ export function listSecuritiesBreakdown(
 
 /**
  * 行情会话日盈亏（证券）：沪深/港股仅统计北京时间今天；美股统计所有美股持仓中
- * 最新的有效交易日。空日期不计入，且不同美股交易日不会混在同一次汇总中。
+ * 最新的有效交易日，且只允许北京今天或昨天的日期（次日结束后过期）。
+ * 空日期不计入，且不同美股交易日不会混在同一次汇总中。
  * 单价涨跌由 `change_percent` + `current_price` 反推（`change_amount` 精度不足，见下）；
  * 股数用 `mapSecurityQuantityBeforeFirstEditToday`（当日减仓按日初股数）。
  */
@@ -503,7 +506,7 @@ export function computeTodayStockPnL(
     currentPrice: number | null;
     changePercent: number | null;
     market?: "hs" | "hk" | "us" | null;
-    /** Juhe 行情会话日 `YYYY-MM-DD` */
+    /** 行情会话日 `YYYY-MM-DD` */
     changeQuoteDate?: string | null;
   }>,
   baseCurrency: string
@@ -549,8 +552,7 @@ export function computeTodayStockPnL(
         (item) =>
           item.market === "us" &&
           item.quantity > 0 &&
-          item.changeQuoteDate != null &&
-          item.changeQuoteDate <= today
+          isUsQuoteDateInDisplayWindow(item.changeQuoteDate, today)
       )
       .map((item) => item.changeQuoteDate!)
       .sort()

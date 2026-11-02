@@ -30,8 +30,14 @@ import { NetWorthDelta } from "./_components/NetWorthDelta";
 import { buildNetWorthHistory } from "@/lib/netWorthHistory";
 import { BaseCurrencyPicker } from "./_components/BaseCurrencyPicker";
 import { formatDate, formatMoney, formatPercent, formatCnDateTime } from "@/lib/utils";
-import { getJuheFxAppKey, getJuheStockAppKey } from "@/lib/juheKeys";
-import { isWeekendBeijing, todayCn, shouldRefreshFxEvery8h, shouldRefreshStocksBy10And14 } from "@/lib/time";
+import { getJuheFxAppKey } from "@/lib/juheKeys";
+import {
+  isAnyStockMarketOpen,
+  isWeekendBeijing,
+  shouldRefreshFxEvery8h,
+  shouldRefreshStocks,
+  todayCn
+} from "@/lib/time";
 import { DataFreshnessBanner } from "./_components/DataFreshness";
 import { accrueTodayInterest } from "@/lib/interest";
 
@@ -77,7 +83,7 @@ export default async function DashboardPage() {
     )
   );
 
-  // 沪深/港股取北京时间今天；美股取最近一个有效交易日。
+  // 沪深/港股取北京时间今天；美股最近交易日最多保留至北京次日结束。
   const todaySecPnL = computeTodayStockPnL(
     secForTodayKpi.map((a) => ({
       id: a.id,
@@ -97,15 +103,15 @@ export default async function DashboardPage() {
   const stocksLast = getLastStocksRefreshAt();
 
   const freshness = {
-    weekend,
+    weekend: weekend && !isAnyStockMarketOpen(),
     fxConfigured: getJuheFxAppKey() !== "",
     fxLast,
     fxError: getLastFxRefreshError(),
     fxStale: shouldRefreshFxEvery8h(fxLast),
-    stocksConfigured: getJuheStockAppKey() !== "",
+    stocksConfigured: true,
     stocksLast,
     stocksError: getLastStocksRefreshError(),
-    stocksStale: shouldRefreshStocksBy10And14(stocksLast),
+    stocksStale: shouldRefreshStocks(stocksLast),
     hasSecurities: hasSecuritiesForKpi
   };
 

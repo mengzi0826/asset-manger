@@ -224,6 +224,82 @@ export function listPortfolioEvents(options: {
   }));
 }
 
+export type SecurityTradeKind = "buy" | "sell" | "dividend" | "liquidation" | "opening";
+
+export interface SecurityTradeEntry {
+  id: number;
+  kind: SecurityTradeKind;
+  grossAmount: number | null;
+  occurredAt: string;
+  /** 成交股数。分红不改份额，为 null。 */
+  quantity: number | null;
+  unitPrice: number | null;
+  unitCostAfter: number | null;
+  cashName: string | null;
+}
+
+const SECURITY_TRADE_KIND: Partial<Record<PortfolioEventType, SecurityTradeKind>> = {
+  security_buy: "buy",
+  security_sell: "sell",
+  security_dividend: "dividend",
+  security_liquidation: "liquidation",
+  asset_created: "opening"
+};
+
+/** 单只证券的交易明细。只读事件层里的证券腿，不从 asset_change 反推。 */
+export function listSecurityTrades(assetId: number, limit = 50): SecurityTradeEntry[] {
+  const capped = Math.min(Math.max(Math.trunc(limit), 1), 200);
+  const rows = getDB()
+    .prepare(
+      `SELECT e.id, e.event_type, e.gross_amount, e.occurred_at,
+              s.quantity_delta, s.quantity_after, s.unit_price, s.unit_cost_after,
+              (SELECT c.asset_name FROM portfolio_event_leg c
+                WHERE c.event_id = e.id AND c.role = 'cash'
+                ORDER BY c.id LIMIT 1) AS cash_name
+       FROM portfolio_event e
+       JOIN portfolio_event_leg s
+         ON s.event_id = e.id AND s.role = 'security' AND s.asset_id = ?
+       WHERE e.event_type IN (
+         'security_buy', 'security_sell', 'security_dividend', 'security_liquidation', 'asset_created'
+       )
+       ORDER BY e.occurred_at DESC, e.id DESC
+       LIMIT ?`
+    )
+    .all(assetId, capped) as Array<{
+      id: number;
+      event_type: PortfolioEventType;
+      gross_amount: number | null;
+      occurred_at: string;
+      quantity_delta: number | null;
+      quantity_after: number | null;
+      unit_price: number | null;
+      unit_cost_after: number | null;
+      cash_name: string | null;
+    }>;
+
+  const entries: SecurityTradeEntry[] = [];
+  for (const row of rows) {
+    const kind = SECURITY_TRADE_KIND[row.event_type];
+    if (!kind) continue;
+    const quantity = kind === "dividend"
+      ? null
+      : row.quantity_delta != null
+        ? Math.abs(row.quantity_delta)
+        : row.quantity_after;
+    entries.push({
+      id: row.id,
+      kind,
+      grossAmount: row.gross_amount,
+      occurredAt: row.occurred_at,
+      quantity,
+      unitPrice: row.unit_price,
+      unitCostAfter: row.unit_cost_after,
+      cashName: row.cash_name
+    });
+  }
+  return entries;
+}
+
 export function getPortfolioEventCoverage(): {
   count: number;
   firstOccurredAt: string | null;

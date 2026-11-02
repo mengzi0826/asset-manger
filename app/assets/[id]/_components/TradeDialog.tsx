@@ -7,7 +7,8 @@ import { useConfirm } from "@/components/ui/ConfirmProvider";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Coins, Loader2, LogOut, TrendingDown, TrendingUp } from "lucide-react";
-import { formatMoney } from "@/lib/utils";
+import type { SecurityTradeEntry, SecurityTradeKind } from "@/lib/portfolioEvents";
+import { formatCnDateTime, formatMoney } from "@/lib/utils";
 
 export interface CashAssetOption {
   id: number;
@@ -25,7 +26,8 @@ export function TradeDialog({
   currentQuantity,
   currentUnitCost,
   currentPrice,
-  cashAssets
+  cashAssets,
+  trades
 }: {
   assetId: number;
   assetName: string;
@@ -34,6 +36,7 @@ export function TradeDialog({
   currentUnitCost: number | null;
   currentPrice: number | null;
   cashAssets: CashAssetOption[];
+  trades: SecurityTradeEntry[];
 }) {
   const router = useRouter();
   const confirmAction = useConfirm();
@@ -244,7 +247,8 @@ export function TradeDialog({
           当前 {currentQuantity} 股 · 均价 {currentUnitCost != null ? round(currentUnitCost, 4) : "—"} {currency}
         </span>
       </div>
-      <form onSubmit={submit} className="card-body space-y-4">
+      <div className="card-body space-y-5">
+      <form onSubmit={submit} className="space-y-4">
         {/* 方向切换 */}
         <div className="inline-flex rounded-md border border-hair p-0.5">
           <button
@@ -475,8 +479,82 @@ export function TradeDialog({
           </button>
         </div>
       </form>
+
+      <TradeHistory trades={trades} currency={currency} />
+      </div>
     </div>
   );
+}
+
+const TRADE_LABEL: Record<SecurityTradeKind, string> = {
+  buy: "增持",
+  sell: "减持",
+  dividend: "分红",
+  liquidation: "清仓",
+  opening: "建仓"
+};
+
+function TradeHistory({ trades, currency }: { trades: SecurityTradeEntry[]; currency: string }) {
+  return (
+    <div className="border-t border-hair pt-4">
+      <div className="mb-2.5 flex items-center justify-between gap-3">
+        <div className="text-[13px] font-medium text-ink-700">交易明细</div>
+        <span className="text-[12px] text-ink-400">{trades.length} 条</span>
+      </div>
+      {trades.length === 0 ? (
+        <div className="rounded-md bg-canvas-sunk/60 px-3 py-5 text-center text-[13px] text-ink-400">
+          暂无增持、减持、分红或清仓记录
+        </div>
+      ) : (
+        <ul className="divide-y divide-hair rounded-md border border-hair px-3.5">
+          {trades.map((trade) => {
+            const inbound = trade.kind === "sell" || trade.kind === "dividend" || trade.kind === "liquidation";
+            const tone = trade.kind === "dividend" ? "gold" : inbound ? "loss" : "gain";
+            return (
+              <li key={trade.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-[13px]">
+                <span className={tone === "gold" ? "chip chip-gold" : tone === "loss" ? "chip chip-loss" : "chip chip-gain"}>
+                  {TRADE_LABEL[trade.kind]}
+                </span>
+                <span className="min-w-0 flex-1 text-ink-700">{tradeSummary(trade)}</span>
+                <span className={`tabular font-medium ${tone === "gold" ? "text-gold-700" : tone === "loss" ? "text-loss-700" : "text-gain-700"}`}>
+                  {trade.grossAmount == null
+                    ? "—"
+                    : `${inbound ? "+" : "−"}${formatMoney(Math.abs(trade.grossAmount), currency, 2)}`}
+                </span>
+                <span className="tabular basis-full text-right text-[12px] text-ink-400 sm:basis-auto">
+                  {formatCnDateTime(trade.occurredAt)}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function tradeSummary(trade: SecurityTradeEntry) {
+  const parts: string[] = [];
+  if (trade.kind !== "dividend" && trade.quantity != null) {
+    parts.push(
+      trade.unitPrice != null
+        ? `${formatCount(trade.quantity)} 股 × ${formatCount(trade.unitPrice)}`
+        : `${formatCount(trade.quantity)} 股`
+    );
+  }
+  if ((trade.kind === "dividend" || trade.kind === "opening") && trade.unitCostAfter != null) {
+    parts.push(`成本价 ${formatCount(trade.unitCostAfter)}`);
+  }
+  if (trade.cashName) {
+    parts.push(`${trade.kind === "buy" || trade.kind === "opening" ? "扣款" : "入账"}「${trade.cashName}」`);
+  } else if (trade.kind !== "dividend") {
+    parts.push("未关联现金");
+  }
+  return parts.join(" · ") || "—";
+}
+
+function formatCount(value: number) {
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 4 }).format(value);
 }
 
 function round(n: number, digits: number) {

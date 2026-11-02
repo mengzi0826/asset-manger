@@ -1,5 +1,5 @@
 ---
-description: 汇率每 8 小时、股票每日北京 10:00/14:00 锚点；AppKey 仅在设置/环境变量
+description: 汇率每 8 小时；股票在三市开市期间每 15 分钟一批；汇率 AppKey 仅在设置/环境变量
 alwaysApply: true
 ---
 
@@ -17,7 +17,7 @@ alwaysApply: true
 
 ## 股票
 
-- 自动：在当日北京时间 **10:00** 与 **14:00** 之后各触发一轮（`shouldRefreshStocksBy10And14` / `lib/stocks.ts`）。在 **10:00 之前**不自动拉。
+- 自动：沪深、港股、美股任一开市期间，距上次请求满 **15 分钟**再拉一批（`shouldRefreshStocks` / `lib/stocks.ts`）。休市不自动拉。行情来自腾讯 `qt.gtimg.cn`，一次请求包含全部持仓，不使用股票 AppKey。
 
 ## 相关文件
 

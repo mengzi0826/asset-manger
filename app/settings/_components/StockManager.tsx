@@ -3,7 +3,7 @@
 import { CheckCircle2, RefreshCcw, AlertTriangle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { formatCnDateTime } from "@/lib/time";
+import { formatCnDateTime, formatCnDateTimeMinute } from "@/lib/time";
 import type { StockAssetView, StockRefreshLogEntry, StockRefreshResult } from "@/lib/stocks";
 
 interface Props {
@@ -91,14 +91,10 @@ export function StockManager({
       setResult(r);
       if (r?.error) {
         setMsg({ text: r.error, tone: "error" });
-      } else if (r?.skipped === "no_key") {
-        setMsg({ text: r.error ?? "请先配置股票价格 AppKey", tone: "error" });
-      } else if (r?.skipped === "weekend") {
-        setMsg({ text: "周末休市，自动刷新已跳过。需要更新上个交易日收盘价请再点一次手动刷新。", tone: "info" });
-      } else if (r?.skipped === "before_morning") {
-        setMsg({ text: "未到今日 10:00，自动刷新尚未开始。", tone: "info" });
+      } else if (r?.skipped === "market_closed") {
+        setMsg({ text: "当前三地市场都未开市，自动刷新已跳过。需要更新最近收盘价请再点一次手动刷新。", tone: "info" });
       } else if (r?.skipped === "up_to_date") {
-        setMsg({ text: "本时段已刷新过。", tone: "info" });
+        setMsg({ text: "距上次刷新未满 15 分钟。", tone: "info" });
       } else if (r?.skipped === "no_securities") {
         setMsg({ text: "当前没有需要刷新的证券资产（请先填写股票代码）", tone: "info" });
       } else if ((r?.updated_count ?? 0) > 0) {
@@ -128,21 +124,21 @@ export function StockManager({
       <div className="card-body space-y-4">
         <div className="rounded-md bg-canvas-sunk/60 p-3 text-[13px] text-ink-500">
           <div>
-            工作日北京时间 <span className="font-semibold text-ink-700">10:00</span> 与{" "}
-            <span className="font-semibold text-ink-700">14:00</span> 后各自动刷新一次（已配置股票
-            AppKey 时生效）。周末自动跳过；手动刷新周末仍会请求。沪深/港股按今日、
-            美股按最近交易日计算当日盈亏。
+            沪深、港股或美股任一市场开市时，每{" "}
+            <span className="font-semibold text-ink-700">15 分钟</span>{" "}
+            自动从腾讯财经拉一批行情，一次请求包含全部持仓。休市不自动拉；手动刷新随时可用。沪深/港股按今日、
+            美股按最近交易日计算当日盈亏，最多保留至北京时间次日结束。港股和美股免费行情可能延迟约 15 分钟。
           </div>
           <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-[12px] text-ink-400">
             <span>
-              上次自动刷新：
+              上次刷新：
               <span className="tabular ml-1 text-ink-600">
-                {lastRefreshedAt ? formatCnDateTime(lastRefreshedAt) : "暂无记录"}
+                {lastRefreshedAt ? formatCnDateTimeMinute(lastRefreshedAt) : "暂无记录"}
               </span>
             </span>
             <span>
               下次计划刷新：
-              <span className="tabular ml-1 text-ink-600">{formatCnDateTime(nextRefreshAt)}</span>
+              <span className="tabular ml-1 text-ink-600">{formatCnDateTimeMinute(nextRefreshAt)}</span>
             </span>
           </div>
         </div>
@@ -187,7 +183,7 @@ export function StockManager({
           </summary>
           <div className="mt-3 space-y-2">
             <div className="text-[12px] text-ink-400">
-              每次单股接口调用写入本地 SQLite，此处展示最近 30 条失败记录，便于排查未刷新原因。
+              每次刷新按标的写入本地 SQLite，此处展示最近 30 条失败记录，便于排查未刷新原因。
             </div>
             {refreshFailures.length > 0 ? (
               <div className="overflow-x-auto rounded-md border border-gain-100">

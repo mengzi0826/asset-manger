@@ -32,6 +32,18 @@ export function todayCn(): string {
   return nowCn().slice(0, 10);
 }
 
+/** 美股会话日仅在同名北京日及次日展示；次日结束后不再作为当日盈亏。 */
+export function isUsQuoteDateInDisplayWindow(
+  quoteDate: string | null | undefined,
+  today: string = todayCn()
+): boolean {
+  if (!quoteDate) return false;
+  const yesterday = toCnIso(
+    new Date(new Date(`${today}T00:00:00+08:00`).getTime() - 24 * 60 * 60 * 1000)
+  ).slice(0, 10);
+  return quoteDate === today || quoteDate === yesterday;
+}
+
 /** 该北京日历日是否为周六 / 周日（按 UTC 日期分量解释 ymd） */
 export function isWeekendBeijing(ymd: string): boolean {
   const [y, m, d] = ymd.split("-").map(Number);
@@ -179,6 +191,22 @@ export function juheQuoteSessionYmdFromData(data: Record<string, unknown>): stri
 }
 
 /**
+ * 腾讯行情字段里的时间，取字符串上的日历日作为行情会话日，不做时区换算。
+ * 沪深常见 `20261020161450`，港股 `2026/10/20 16:08:24`，美股 `2026-10-19 16:00:01`（美东当地日期）。
+ */
+export function parseTencentQuoteTimeToSessionYmd(
+  raw: string | number | undefined | null
+): string | null {
+  if (raw == null || raw === "") return null;
+  const s = String(raw).trim();
+  const compact = s.match(/^(\d{4})(\d{2})(\d{2})\d{6}$/);
+  if (compact) {
+    return validCalendarYmd(Number(compact[1]), Number(compact[2]), Number(compact[3]));
+  }
+  return parseLooseCalendarYmdToBeijing(s);
+}
+
+/**
  * 宽松解析数据库里的时间字符串。
  * - 形如 `YYYY-MM-DD HH:MM:SS` 或 `YYYY-MM-DDTHH:MM:SS`（无时区）→ 按 UTC 解析
  *   （SQLite `CURRENT_TIMESTAMP` 历史数据）。
@@ -200,59 +228,127 @@ export function formatCnDateTime(s?: string | null): string {
   return toCnIso(d).slice(0, 16).replace("T", " ");
 }
 
+/** 北京时间 ISO，精度到分钟（秒恒为 00）。只给需要亚小时节流的水位用。 */
+export function toCnIsoMinute(d: Date): string {
+  if (Number.isNaN(d.getTime())) return "";
+  const t = new Date(d.getTime() + CN_TZ_OFFSET_MS);
+  return (
+    `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}` +
+    `T${pad(t.getUTCHours())}:${pad(t.getUTCMinutes())}:00+08:00`
+  );
+}
+
+export function nowCnMinute(): string {
+  return toCnIsoMinute(new Date());
+}
+
+/** 展示北京时间到分钟，用于股价刷新水位。 */
+export function formatCnDateTimeMinute(s?: string | null): string {
+  if (!s) return "-";
+  const d = parseDbDate(s);
+  if (Number.isNaN(d.getTime())) return s;
+  return toCnIsoMinute(d).slice(0, 16).replace("T", " ");
+}
+
 /** 汇率：距上次非手动拉取满 8 小时再刷新 */
 export const FX_REFRESH_INTERVAL_MS = 8 * 60 * 60 * 1000;
 
-/** 股票：北京时间每日 10:00 与 14:00 各可触发一次自动刷新 */
-export const STOCK_REFRESH_HOURS_BEIJING: readonly [number, number] = [10, 14];
+/** 股票：任一市场开市期间，距上次实际请求满 15 分钟再自动拉一批 */
+export const STOCK_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
-/**
- * 今天北京时间的某整点/整分，转为绝对时间戳（毫秒）。
- * 如 hour=10, minute=0 表示今天北京时间 10:00。
- */
-export function cnTimeTodayToMs(hour: number, minute: number = 0): number {
-  return new Date(
-    `${todayCn()}T${pad(hour)}:${pad(minute)}:00+08:00`
-  ).getTime();
+const STOCK_SESSION_LOOKAHEAD_MINUTES = 4 * 24 * 60;
+
+function zonedWeekdayAndMinutes(date: Date, timeZone: string): { weekday: number; minutes: number } {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  });
+  const parts = fmt.formatToParts(date);
+  const weekdayName = parts.find((p) => p.type === "weekday")?.value ?? "";
+  const weekday = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[weekdayName] ?? 0;
+  let hour = Number(parts.find((p) => p.type === "hour")?.value);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value);
+  if (hour === 24) hour = 0;
+  return { weekday, minutes: hour * 60 + minute };
 }
 
-/**
- * 当前时刻之前、当天已触发的「股票日级锚点」中最近的一个；早于今天 10:00 则 null。
- * 如 11:00 → 10:00；16:00 → 14:00；9:00 → null。
- */
-export function latestPassedCnStockAnchorMs(): number | null {
-  const now = Date.now();
-  let best: number | null = null;
-  for (const h of STOCK_REFRESH_HOURS_BEIJING) {
-    const a = cnTimeTodayToMs(h, 0);
-    if (a <= now && (best == null || a > best)) best = a;
+function inSessionWindow(minutes: number, start: number, end: number): boolean {
+  return minutes >= start && minutes < end;
+}
+
+/** 沪深连续竞价：工作日 9:30–11:30、13:00–15:00（北京时间） */
+export function isHsMarketOpen(now: Date = new Date()): boolean {
+  const { weekday, minutes } = zonedWeekdayAndMinutes(now, "Asia/Shanghai");
+  if (weekday === 0 || weekday === 6) return false;
+  return (
+    inSessionWindow(minutes, 9 * 60 + 30, 11 * 60 + 30) ||
+    inSessionWindow(minutes, 13 * 60, 15 * 60)
+  );
+}
+
+/** 港股持续交易：工作日 9:30–12:00、13:00–16:00（香港与北京同时区） */
+export function isHkMarketOpen(now: Date = new Date()): boolean {
+  const { weekday, minutes } = zonedWeekdayAndMinutes(now, "Asia/Shanghai");
+  if (weekday === 0 || weekday === 6) return false;
+  return (
+    inSessionWindow(minutes, 9 * 60 + 30, 12 * 60) ||
+    inSessionWindow(minutes, 13 * 60, 16 * 60)
+  );
+}
+
+/** 美股常规交易：美东工作日 9:30–16:00，夏令时/冬令时由 America/New_York 决定 */
+export function isUsMarketOpen(now: Date = new Date()): boolean {
+  const { weekday, minutes } = zonedWeekdayAndMinutes(now, "America/New_York");
+  if (weekday === 0 || weekday === 6) return false;
+  return inSessionWindow(minutes, 9 * 60 + 30, 16 * 60);
+}
+
+export function isAnyStockMarketOpen(now: Date = new Date()): boolean {
+  return isHsMarketOpen(now) || isHkMarketOpen(now) || isUsMarketOpen(now);
+}
+
+/** 从当前时刻往后找下一分钟级开市点；已开市则返回 now。 */
+export function nextStockMarketOpen(now: Date = new Date()): Date {
+  if (isAnyStockMarketOpen(now)) return now;
+  const start = now.getTime();
+  for (let i = 1; i <= STOCK_SESSION_LOOKAHEAD_MINUTES; i++) {
+    const t = new Date(start + i * 60 * 1000);
+    if (isAnyStockMarketOpen(t)) return t;
   }
-  return best;
+  return new Date(start + 60 * 1000);
 }
 
 /**
- * 股票：在 10:00/14:00 两个锚点，若 `last` 早于「当前应满足的最近锚点」则需拉取一次。
+ * 自动刷新：当前有市场开着，且距上次水位已满 15 分钟。休市返回 false。
  */
-export function shouldRefreshStocksBy10And14(
-  lastIso: string | null | undefined
+export function shouldRefreshStocks(
+  lastIso: string | null | undefined,
+  now: Date = new Date()
 ): boolean {
-  const anchor = latestPassedCnStockAnchorMs();
-  if (anchor == null) return false; // 未到今日 10:00，不自动拉
-  const last = lastIso ? parseDbDate(lastIso).getTime() : 0;
+  if (!isAnyStockMarketOpen(now)) return false;
+  if (!lastIso) return true;
+  const last = parseDbDate(lastIso).getTime();
   if (!Number.isFinite(last)) return true;
-  return last < anchor;
+  return now.getTime() - last >= STOCK_REFRESH_INTERVAL_MS;
 }
 
-/** 下一次股票自动触发的计划时间（北京时间 ISO） */
-export function nextStockAutoRefreshIso(): string {
-  const now = Date.now();
-  const t10 = cnTimeTodayToMs(STOCK_REFRESH_HOURS_BEIJING[0], 0);
-  const t14 = cnTimeTodayToMs(STOCK_REFRESH_HOURS_BEIJING[1], 0);
-  if (now < t10) return toCnIso(new Date(t10));
-  if (now < t14) return toCnIso(new Date(t14));
-  // 明日 10:00
-  const tNext10 = t10 + 24 * 60 * 60 * 1000;
-  return toCnIso(new Date(tNext10));
+/** 下一次股票自动触发时间（北京时间，精度到分钟） */
+export function nextStockAutoRefreshIso(
+  lastIso?: string | null,
+  now: Date = new Date()
+): string {
+  if (isAnyStockMarketOpen(now)) {
+    const last = lastIso ? parseDbDate(lastIso).getTime() : NaN;
+    if (Number.isFinite(last)) {
+      const due = last + STOCK_REFRESH_INTERVAL_MS;
+      if (due > now.getTime()) return toCnIsoMinute(new Date(due));
+    }
+    return toCnIsoMinute(now);
+  }
+  return toCnIsoMinute(nextStockMarketOpen(now));
 }
 
 /** 汇率：距 `last` 是否已满 8 小时；无记录视为需要刷新。 */

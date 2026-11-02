@@ -2,7 +2,7 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { formatCnDate } from "./time";
 
-export { formatCnDate, formatCnDateTime } from "./time";
+export { formatCnDate, formatCnDateTime, formatCnDateTimeMinute } from "./time";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

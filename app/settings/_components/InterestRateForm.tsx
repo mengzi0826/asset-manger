@@ -62,7 +62,7 @@ export function InterestRateForm({ buckets }: { buckets: InterestBucketStatus[] 
         <p className="text-[13px] leading-relaxed text-ink-500">
           人民币、港币、美元按对应现金余额计息，加密货币按美元计价的加密资产计息。存款、基金和证券不计入。
           日息 = 计息本金 × 年化利率 / {INTEREST_DAY_COUNT}，四舍五入到分。每个北京日计息一次，利息账户余额次日计入本金。
-          修改当日利率会按首次锁定的本金重算。
+          电脑休眠或关机错过的日期，下次进程恢复时按休眠前余额逐日补记，并记到对应日期。修改当日利率只重算今天。
         </p>
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           {buckets.map((bucket) => {

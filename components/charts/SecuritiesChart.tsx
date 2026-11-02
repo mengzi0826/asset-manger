@@ -104,6 +104,7 @@ export interface SecuritiesPanelData {
   unrealizedPnL: number;
   positionCount: number;
   currency: string;
+  marketOpen: Partial<Record<MarketLabel, boolean>>;
   securitiesHistory: Array<{ date: string; value: number }>;
   /** 每日浮动盈亏序列（由 asset_change 价格记录重建） */
   pnlHistory: Array<{ date: string; pnl: number }>;
@@ -497,7 +498,7 @@ export function SecuritiesPanel({
 
       {/* ── 持仓明细列表（按市场分组） ── */}
       {showDetail && (
-        <div className="overflow-x-auto"><div className="min-w-[760px]"><MarketGroupedDetail positions={ranked} isDark={isDark} /></div></div>
+        <div className="overflow-x-auto"><div className="min-w-[760px]"><MarketGroupedDetail positions={ranked} marketOpen={data.marketOpen} isDark={isDark} /></div></div>
       )}
     </div>
   );
@@ -651,9 +652,11 @@ function PositionHeaderRow() {
 
 function MarketGroupedDetail({
   positions,
+  marketOpen,
   isDark
 }: {
   positions: SecuritiesPosition[];
+  marketOpen: SecuritiesPanelData["marketOpen"];
   isDark: boolean;
 }) {
   // 按固定顺序分组
@@ -695,8 +698,8 @@ function MarketGroupedDetail({
               <span className="text-[11px] text-ink-300">{list.length} 只</span>
               <span className="text-[11px] tabular text-ink-400">
                 {sessionDate
-                  ? `${m === "美股" ? "最近交易日" : "交易日"} ${sessionDate}`
-                  : "暂无会话日"}
+                  ? `交易日 ${sessionDate}`
+                  : marketOpen[m] === false ? "休市" : "暂无当日行情"}
               </span>
               <span className="ml-auto flex items-baseline gap-3 text-[11px]">
                 <span className="text-ink-400">

@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { getDB, type Account, type AssetRow, type Category } from "@/lib/db";
 import { assetsListHref } from "@/lib/assetsNav";
 import { listCashFlowEntries } from "@/lib/history";
+import { listSecurityTrades } from "@/lib/portfolioEvents";
 import { accrueTodayInterest, interestBucketForAsset } from "@/lib/interest";
 import { AssetForm } from "../_components/AssetForm";
 import { CashFlowPanel } from "./_components/CashFlowPanel";
@@ -67,6 +68,7 @@ export default async function EditAssetPage({
           currentUnitCost={asset.unit_cost}
           currentPrice={asset.current_price}
           cashAssets={cashAssets}
+          trades={listSecurityTrades(asset.id)}
         />
         </OperationSheet>
       )}

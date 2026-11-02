@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
-import { formatCnDateTime } from "@/lib/utils";
+import { formatCnDateTime, formatCnDateTimeMinute } from "@/lib/utils";
 
 export interface DataFreshnessProps {
   weekend: boolean;
@@ -17,6 +17,10 @@ export interface DataFreshnessProps {
 
 function stamp(iso: string | null): string {
   return iso ? formatCnDateTime(iso) : "—";
+}
+
+function stockStamp(iso: string | null): string {
+  return iso ? formatCnDateTimeMinute(iso) : "—";
 }
 
 function warningsOf(props: DataFreshnessProps): string[] {
@@ -39,7 +43,7 @@ function warningsOf(props: DataFreshnessProps): string[] {
   else if (stocksStale && hasSecurities && !weekend) {
     warnings.push(
       stocksLast
-        ? `股价仍是 ${stamp(stocksLast)} 的数据，本时段尚未更新成功。`
+        ? `股价仍是 ${stockStamp(stocksLast)} 的数据，开市后尚未更新成功。`
         : "尚未成功拉取过股票价格。"
     );
   }
@@ -72,7 +76,7 @@ export function DataFreshnessLine(props: Omit<DataFreshnessProps, "hasSecurities
         <span
           className={`tabular ${stocksError || (stocksStale && !weekend) ? "text-gold-700" : "text-ink-600"}`}
         >
-          {!stocksConfigured ? "未配置" : stamp(stocksLast)}
+          {!stocksConfigured ? "未配置" : stockStamp(stocksLast)}
         </span>
       </span>
       {weekend && (

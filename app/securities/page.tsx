@@ -4,7 +4,7 @@ import { ExternalLink, Plus, TrendingUp } from "lucide-react";
 import { getSetting } from "@/lib/db";
 import { convert, kickoffRatesRefresh } from "@/lib/fx";
 import { kickoffStockPricesRefresh, parseStockSymbol } from "@/lib/stocks";
-import { todayCn, isWeekendBeijing } from "@/lib/time";
+import { todayCn, isWeekendBeijing, isHsMarketOpen, isHkMarketOpen, isUsMarketOpen } from "@/lib/time";
 import { valueAll } from "@/lib/valuation";
 import {
   computeTodayStockPnL,
@@ -41,7 +41,7 @@ export default async function SecuritiesPage() {
     secItems.map((asset) => [asset.id, parseStockSymbol(asset.symbol)] as const)
   );
 
-  // 沪深/港股取北京时间今天；美股取最近一个有效交易日（见 lib/history.ts）。
+  // 沪深/港股取北京时间今天；美股最近交易日最多保留至北京次日结束。
   const todayPnL = computeTodayStockPnL(
     secItems.map((a) => ({
       id: a.id,
@@ -132,12 +132,18 @@ export default async function SecuritiesPage() {
     qtyDayStartById
   );
 
+  const now = new Date();
   const panelData: SecuritiesPanelData = {
     totalValue,
     totalCost: secTotalCost,
     unrealizedPnL: secUnrealized,
     positionCount: secItems.length,
     currency: baseCurrency,
+    marketOpen: {
+      "沪深 A 股": isHsMarketOpen(now),
+      "港股": isHkMarketOpen(now),
+      "美股": isUsMarketOpen(now)
+    },
     securitiesHistory,
     pnlHistory,
     positions: secPositions

@@ -7,36 +7,27 @@ import {
   SETTING_LAST_STOCKS_REFRESH_ERROR,
   type AssetWithMeta
 } from "./db";
-import { getJuheStockAppKey } from "./juheKeys";
 import { recordSnapshot } from "./history";
 import {
-  isWeekendBeijing,
-  juheQuoteSessionYmdFromData,
-  latestPassedCnStockAnchorMs,
+  isAnyStockMarketOpen,
   nextStockAutoRefreshIso,
   nowCn,
+  nowCnMinute,
   parseDbDate,
-  shouldRefreshStocksBy10And14,
-  todayCn,
+  parseTencentQuoteTimeToSessionYmd,
+  shouldRefreshStocks,
   toCnIso
 } from "./time";
 
 /**
- * 聚合数据「股票数据」接口（与汇率的 AppKey 在设置中分别配置，也可分别用环境变量覆盖）。
- * 三市对应三个 endpoint：
- *   - 沪深 A 股（含上证/深证指数）：/finance/stock/hs?gid=sh601009
- *   - 香港股市：/finance/stock/hk?num=00001
- *   - 美国股市：/finance/stock/usa?gid=aapl
- * 数据延迟约数分钟；自动拉取在每日北京时间 10:00 与 14:00 两个锚点各最多一次（见 time.ts）。
- * 自动刷新在北京周六日直接跳过；手动 `force` 仍会请求。`change_quote_date` 为接口会话日；
- * 沪深/港股按北京时间当天统计，美股按最近交易日统计。解析不到则写 null，不假装成今天。
+ * 腾讯财经公开行情 `https://qt.gtimg.cn/q=`。一次请求用逗号拼上全部持仓，不需要 AppKey。
+ * 代码：沪深 `sh600519` / `sz000001`，港股 `hk00700`，美股 `usAAPL`。
+ * 返回 GBK，`~` 分隔。现价 `[3]`，行情时间 `[30]`，涨跌额 `[31]`，涨跌幅 `[32]`（百分数，入库除以 100）。
+ * 自动刷新在任一市场开市期间每 15 分钟一批；休市不打接口。手动 `force` 随时拉。
+ * `change_quote_date` 取时间字段上的日历日：沪深/港股是北京/香港日期，美股是美东交易日。解析不到写 null。
  */
 
-const JUHE_STOCK_ENDPOINT: Record<StockMarket, string> = {
-  hs: "https://web.juhe.cn/finance/stock/hs",
-  hk: "https://web.juhe.cn/finance/stock/hk",
-  us: "https://web.juhe.cn/finance/stock/usa"
-};
+const TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q=";
 
 export type StockMarket = "hs" | "hk" | "us";
 
@@ -143,138 +134,88 @@ export function parseStockSymbol(rawSymbol: string | null | undefined): StockSym
   return null;
 }
 
-interface JuheStockResp {
-  resultcode?: string;
-  error_code?: number;
-  reason?: string;
-  result?: Array<{ data?: Record<string, string | number | undefined> }> | null;
-}
-
-function extractPrice(market: StockMarket, data: Record<string, unknown>): number | null {
-  // 沪深返回 nowPri；港股/美股返回 lastestpri
-  const raw = market === "hs" ? data.nowPri : data.lastestpri;
-  if (raw == null) return null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-/**
- * 解析单股「当日涨跌」字段。三市字段名差异：
- *   HS: increase（涨跌额，已是绝对值带正负）、increPer（涨跌幅，单位 %）
- *   HK: uppic（涨跌额）、limit（涨跌幅，单位 %）
- *   US: uppic（涨跌额）、limit（涨跌幅，单位 %）
- * 注意：接口返回的是百分号下的原始数（0.13 表示 0.13%），这里统一换成小数（0.0013）。
- */
-function extractChange(
-  market: StockMarket,
-  data: Record<string, unknown>
-): { changeAmount: number | null; changePercent: number | null } {
-  const rawAmount = market === "hs" ? data.increase : data.uppic;
-  const rawPercent = market === "hs" ? data.increPer : data.limit;
-  const amt = rawAmount == null ? NaN : Number(rawAmount);
-  const pct = rawPercent == null ? NaN : Number(rawPercent);
-  return {
-    changeAmount: Number.isFinite(amt) ? amt : null,
-    // 接口的 0.13 表示 0.13%；除以 100 转成纯小数
-    changePercent: Number.isFinite(pct) ? pct / 100 : null
-  };
-}
-
-function isFatalJuheCode(code: number): boolean {
-  return [10001, 10002, 10003, 10004, 10005, 10007, 10008, 10009, 10011, 10012, 10021].includes(
-    code
-  );
-}
-
 type FetchPriceResult =
   | {
       ok: true;
       price: number;
       changeAmount: number | null;
       changePercent: number | null;
-      /** 接口 `date` / `time` 推断的行情会话日（北京 YYYY-MM-DD） */
+      /** 行情时间字段上的会话日。沪深/港股为当地日期，美股为美东交易日。 */
       quoteSessionYmd: string | null;
     }
-  | { ok: false; fatal: boolean; error: string };
+  | { ok: false; error: string };
 
-const JUHE_STOCK_MAX_ATTEMPTS = 3;
-const JUHE_STOCK_RETRY_DELAY_MS = 1000;
+const TENCENT_QUOTE_MAX_ATTEMPTS = 3;
+const TENCENT_QUOTE_RETRY_DELAY_MS = 1000;
 
-async function fetchPriceFromJuheOnce(
-  info: StockSymbolInfo,
-  appkey: string
-): Promise<FetchPriceResult> {
-  const endpoint = JUHE_STOCK_ENDPOINT[info.market];
-  const u = new URL(endpoint);
-  u.searchParams.set("key", appkey);
-  if (info.market === "hk") {
-    u.searchParams.set("num", info.apiParam);
-  } else {
-    u.searchParams.set("gid", info.apiParam);
+/** 腾讯批量接口用的代码。沪深 apiParam 已是 sh/sz 前缀。 */
+export function tencentQuoteCode(info: StockSymbolInfo): string {
+  if (info.market === "hs") return info.apiParam.toLowerCase();
+  if (info.market === "hk") return `hk${info.apiParam}`;
+  return `us${info.apiParam.toUpperCase()}`;
+}
+
+function parseTencentQuoteFields(fields: string[]): FetchPriceResult {
+  const name = fields[1]?.trim() ?? "";
+  if (fields.length < 33 || !name) {
+    return { ok: false, error: "未找到行情" };
   }
+  const price = Number(fields[3]);
+  if (!Number.isFinite(price) || price <= 0) {
+    return { ok: false, error: "未解析到价格字段" };
+  }
+  const amt = Number(fields[31]);
+  const pct = Number(fields[32]);
+  return {
+    ok: true,
+    price,
+    changeAmount: Number.isFinite(amt) ? amt : null,
+    changePercent: Number.isFinite(pct) ? pct / 100 : null,
+    quoteSessionYmd: parseTencentQuoteTimeToSessionYmd(fields[30])
+  };
+}
 
+function parseTencentQuoteBody(body: string): Map<string, FetchPriceResult> {
+  const byCode = new Map<string, FetchPriceResult>();
+  for (const match of body.matchAll(/v_([a-zA-Z0-9.]+)="([^"]*)"/g)) {
+    byCode.set(match[1].toLowerCase(), parseTencentQuoteFields(match[2].split("~")));
+  }
+  return byCode;
+}
+
+async function fetchTencentQuoteBatchOnce(
+  codes: string[]
+): Promise<{ ok: true; byCode: Map<string, FetchPriceResult> } | { ok: false; error: string }> {
   try {
-    const res = await undiciFetch(u.toString(), {
+    const res = await undiciFetch(`${TENCENT_QUOTE_URL}${codes.join(",")}`, {
       headers: {
-        accept: "application/json,text/plain,*/*",
+        accept: "text/plain,*/*",
         "user-agent": "asset-manager/1.0 (+node)"
       },
       signal: AbortSignal.timeout(8000)
     });
-    if (!res.ok) {
-      return { ok: false, fatal: false, error: `HTTP ${res.status}` };
-    }
-    const json = (await res.json()) as JuheStockResp;
-    const code = Number(json.error_code ?? json.resultcode ?? 0);
-    // resultcode=200 与 error_code=0 均代表成功；两者是聚合数据新旧两套错误码
-    const success = code === 0 || code === 200;
-    if (!success) {
-      return {
-        ok: false,
-        fatal: isFatalJuheCode(code),
-        error: json.reason ?? `code=${code}`
-      };
-    }
-    const first = Array.isArray(json.result) ? json.result[0] : undefined;
-    const data = first?.data;
-    if (!data) {
-      return { ok: false, fatal: false, error: "未返回数据体" };
-    }
-    const price = extractPrice(info.market, data as Record<string, unknown>);
-    if (price == null) {
-      return { ok: false, fatal: false, error: "未解析到价格字段" };
-    }
-    const { changeAmount, changePercent } = extractChange(
-      info.market,
-      data as Record<string, unknown>
-    );
-    return {
-      ok: true,
-      price,
-      changeAmount,
-      changePercent,
-      quoteSessionYmd: juheQuoteSessionYmdFromData(data as Record<string, unknown>)
-    };
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const text = new TextDecoder("gbk").decode(await res.arrayBuffer());
+    if (!text.trim()) return { ok: false, error: "空响应" };
+    return { ok: true, byCode: parseTencentQuoteBody(text) };
   } catch (e: any) {
     const cause = e?.cause;
     const detail = [e?.message, cause?.code, cause?.message].filter(Boolean).join(" | ");
-    return { ok: false, fatal: false, error: detail || "network error" };
+    return { ok: false, error: detail || "network error" };
   }
 }
 
-async function fetchPriceFromJuhe(
-  info: StockSymbolInfo,
-  appkey: string
-): Promise<FetchPriceResult> {
-  let last: FetchPriceResult = { ok: false, fatal: false, error: "unknown" };
-  for (let attempt = 1; attempt <= JUHE_STOCK_MAX_ATTEMPTS; attempt++) {
-    last = await fetchPriceFromJuheOnce(info, appkey);
-    if (last.ok || last.fatal) return last;
-    if (attempt < JUHE_STOCK_MAX_ATTEMPTS) {
-      console.warn(
-        `[stocks] ${info.display} attempt ${attempt} failed (${last.error}), retrying...`
-      );
-      await new Promise((r) => setTimeout(r, JUHE_STOCK_RETRY_DELAY_MS));
+async function fetchTencentQuoteBatch(
+  codes: string[]
+): Promise<{ ok: true; byCode: Map<string, FetchPriceResult> } | { ok: false; error: string }> {
+  let last: { ok: false; error: string } = { ok: false, error: "unknown" };
+  for (let attempt = 1; attempt <= TENCENT_QUOTE_MAX_ATTEMPTS; attempt++) {
+    const result = await fetchTencentQuoteBatchOnce(codes);
+    if (result.ok) return result;
+    last = result;
+    if (attempt < TENCENT_QUOTE_MAX_ATTEMPTS) {
+      console.warn(`[stocks] batch attempt ${attempt} failed (${result.error}), retrying...`);
+      await new Promise((r) => setTimeout(r, TENCENT_QUOTE_RETRY_DELAY_MS));
     }
   }
   return last;
@@ -358,7 +299,7 @@ function logStockApiResult(
       assetId: asset.id,
       assetName: asset.name,
       symbol: asset.symbol,
-      apiParam: info.apiParam,
+      apiParam: tencentQuoteCode(info),
       ok: true,
       price: r.price,
       force
@@ -372,7 +313,7 @@ function logStockApiResult(
     assetId: asset.id,
     assetName: asset.name,
     symbol: asset.symbol,
-    apiParam: info.apiParam,
+    apiParam: tencentQuoteCode(info),
     ok: false,
     error: r.error,
     force
@@ -451,13 +392,7 @@ export interface StockRefreshItem extends StockAssetView {
 export interface StockRefreshResult {
   last_refreshed_at: string | null;
   next_refresh_at: string;
-  skipped:
-    | "before_morning"
-    | "up_to_date"
-    | "no_securities"
-    | "no_key"
-    | "weekend"
-    | null;
+  skipped: "market_closed" | "up_to_date" | "no_securities" | null;
   updated_count: number;
   failed_count: number;
   error?: string;
@@ -531,14 +466,14 @@ let refreshInFlight = false;
 
 /**
  * 刷新所有证券类资产的 current_price。
- * - 自动：需已过当日第一个锚点 10:00，且 10/14 点对应的「本阶段」尚未拉取
- * - 强制：只校验已配置「股票数据」用 AppKey
+ * - 自动：任一市场开市，且距上次请求已满 15 分钟
+ * - 强制：忽略开市与间隔，立刻拉一批
  */
 export async function refreshStockPrices(
   opts: { force?: boolean; market?: StockMarket } = {}
 ): Promise<StockRefreshResult> {
   const lastRefreshedAt = getSetting("last_stocks_refresh_at");
-  const next_refresh_at = nextStockAutoRefreshIso();
+  const next_refresh_at = nextStockAutoRefreshIso(lastRefreshedAt);
 
   if (refreshInFlight) {
     return {
@@ -551,53 +486,26 @@ export async function refreshStockPrices(
     };
   }
 
-  const appkey = getJuheStockAppKey();
-
-  if (!appkey) {
+  if (!opts.force && !isAnyStockMarketOpen()) {
     return {
       last_refreshed_at: lastRefreshedAt,
       next_refresh_at,
-      skipped: "no_key",
-      updated_count: 0,
-      failed_count: 0,
-      error:
-        "请先在「设置」中配置股票价格 AppKey，或使用环境变量 JUHE_STOCK_APPKEY",
-      items: []
-    };
-  }
-
-  if (!opts.force && isWeekendBeijing(todayCn())) {
-    return {
-      last_refreshed_at: lastRefreshedAt,
-      next_refresh_at,
-      skipped: "weekend",
+      skipped: "market_closed",
       updated_count: 0,
       failed_count: 0,
       items: []
     };
   }
 
-  if (!opts.force) {
-    if (latestPassedCnStockAnchorMs() == null) {
-      return {
-        last_refreshed_at: lastRefreshedAt,
-        next_refresh_at,
-        skipped: "before_morning",
-        updated_count: 0,
-        failed_count: 0,
-        items: []
-      };
-    }
-    if (!shouldRefreshStocksBy10And14(lastRefreshedAt)) {
-      return {
-        last_refreshed_at: lastRefreshedAt,
-        next_refresh_at,
-        skipped: "up_to_date",
-        updated_count: 0,
-        failed_count: 0,
-        items: []
-      };
-    }
+  if (!opts.force && !shouldRefreshStocks(lastRefreshedAt)) {
+    return {
+      last_refreshed_at: lastRefreshedAt,
+      next_refresh_at,
+      skipped: "up_to_date",
+      updated_count: 0,
+      failed_count: 0,
+      items: []
+    };
   }
 
   const assets = listSecuritiesWithSymbol().filter((asset) => {
@@ -640,8 +548,12 @@ export async function refreshStockPrices(
   let updatedCount = 0;
   let failedCount = 0;
 
-  for (const asset of assets) {
-    const info = parseStockSymbol(asset.symbol);
+  const parsed = assets.map((asset) => ({ asset, info: parseStockSymbol(asset.symbol) }));
+  const codes = parsed.flatMap(({ info }) => (info ? [tencentQuoteCode(info)] : []));
+  const batch = codes.length > 0 ? await fetchTencentQuoteBatch(codes) : null;
+
+  for (const { asset, info } of parsed) {
+    const quoteCode = info ? tencentQuoteCode(info) : null;
     const base: StockRefreshItem = {
       asset_id: asset.id,
       account_name: asset.account_name,
@@ -661,24 +573,29 @@ export async function refreshStockPrices(
       updated: false
     };
 
-    if (!info) {
-      base.error = "无法识别股票代码";
-      failedCount++;
+    let r: FetchPriceResult;
+    if (!info || !quoteCode) {
+      r = { ok: false, error: "无法识别股票代码" };
+    } else if (!batch || !batch.ok) {
+      r = { ok: false, error: batch?.error ?? "未请求行情" };
+    } else {
+      r = batch.byCode.get(quoteCode.toLowerCase()) ?? { ok: false, error: "未返回该代码" };
+    }
+
+    if (info) logStockApiResult(runId, info, asset, r, !!opts.force);
+    else {
       writeStockRefreshLog({
         runId,
         assetId: asset.id,
         assetName: asset.name,
         symbol: asset.symbol,
         ok: false,
-        error: base.error,
+        error: r.ok ? undefined : r.error,
         force: !!opts.force
       });
-      console.warn(`[stocks] ${asset.symbol ?? asset.name} fail: ${base.error}`);
-      items.push(base);
-      continue;
+      console.warn(`[stocks] ${asset.symbol ?? asset.name} fail: ${r.ok ? "" : r.error}`);
     }
-    const r = await fetchPriceFromJuhe(info, appkey);
-    logStockApiResult(runId, info, asset, r, !!opts.force);
+
     if (r.ok) {
       const now = nowCn();
       const quoteToStore = r.quoteSessionYmd;
@@ -708,8 +625,9 @@ export async function refreshStockPrices(
   }
 
   // 仅完整刷新才能推进全局自动刷新时间；单市场手动刷新不能让其它市场被误判为已刷新。
+  // 水位记到分钟，否则整点精度会让 15 分钟间隔在同一小时内反复触发。
   if (!opts.market && (updatedCount > 0 || failedCount > 0)) {
-    setSetting("last_stocks_refresh_at", nowCn());
+    setSetting("last_stocks_refresh_at", nowCnMinute());
   }
 
   const batchError =
@@ -734,9 +652,10 @@ export async function refreshStockPrices(
     `[stocks] refresh done run=${runId} updated=${updatedCount} failed=${failedCount} force=${!!opts.force}`
   );
 
+  const refreshedAt = getSetting("last_stocks_refresh_at");
   return {
-    last_refreshed_at: getSetting("last_stocks_refresh_at"),
-    next_refresh_at,
+    last_refreshed_at: refreshedAt,
+    next_refresh_at: nextStockAutoRefreshIso(refreshedAt),
     skipped: null,
     updated_count: updatedCount,
     failed_count: failedCount,

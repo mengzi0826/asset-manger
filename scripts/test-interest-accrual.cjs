@@ -47,6 +47,13 @@ const dbMod = load(path.join(project, "lib/db.ts"));
 const { dailyInterest } = load(path.join(project, "lib/interestMath.ts"));
 const { saveInterestRates, accrueTodayInterest, getInterestStatus } = load(path.join(project, "lib/interest.ts"));
 const db = dbMod.getDB();
+db.prepare("DELETE FROM portfolio_event WHERE event_type = 'interest_income'").run();
+db.prepare("DELETE FROM interest_accrual").run();
+db.prepare(
+  `UPDATE asset SET amount = 0 WHERE id IN (
+     SELECT a.id FROM asset a JOIN account acc ON acc.id = a.account_id WHERE acc.notes LIKE 'interest:%'
+   )`
+).run();
 
 function sum(category, currency) {
   const rows = db.prepare(
@@ -111,6 +118,43 @@ const status = getInterestStatus().find((bucket) => bucket.id === "hkd");
 assert.equal(status.accrued, true);
 assert.equal(status.principal, before.hkd);
 assert.equal(status.todayInterest, dailyInterest(before.hkd, rates.hkd));
+
+function shift(ymd, days) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const utc = new Date(Date.UTC(y, m - 1, d));
+  utc.setUTCDate(utc.getUTCDate() + days);
+  const month = String(utc.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(utc.getUTCDate()).padStart(2, "0");
+  return `${utc.getUTCFullYear()}-${month}-${day}`;
+}
+const cents = (value) => Math.round(value * 100);
+const { todayCn } = load(path.join(project, "lib/time.ts"));
+const today = todayCn();
+saveInterestRates({ ...rates, cny: 0.02 });
+const seeded = dailyInterest(before.cny, 0.02);
+assert.equal(interestOf("interest:cny"), seeded);
+const hkdBeforeGap = interestOf("interest:hkd");
+const sleptFrom = shift(today, -2);
+db.prepare("UPDATE interest_accrual SET date = ? WHERE bucket = 'cny'").run(sleptFrom);
+db.prepare(
+  "UPDATE portfolio_event SET occurred_at = ? WHERE id = (SELECT event_id FROM interest_accrual WHERE bucket = 'cny')"
+).run(`${sleptFrom}T12:00:00+08:00`);
+accrueTodayInterest();
+const middle = shift(today, -1);
+const second = dailyInterest(before.cny + seeded, 0.02);
+const third = dailyInterest(before.cny + seeded + second, 0.02);
+assert.equal(cents(interestOf("interest:cny")), cents(seeded) + cents(second) + cents(third));
+assert.equal(interestOf("interest:hkd"), hkdBeforeGap);
+const cnyRows = db.prepare("SELECT date, interest FROM interest_accrual WHERE bucket = 'cny' ORDER BY date").all();
+assert.deepEqual(cnyRows.map((row) => row.date), [sleptFrom, middle, today]);
+assert.deepEqual(cnyRows.map((row) => row.interest), [seeded, second, third]);
+const occurred = db.prepare(
+  "SELECT substr(occurred_at, 1, 10) AS date FROM portfolio_event WHERE event_type = 'interest_income' AND currency = 'CNY' ORDER BY occurred_at"
+).all();
+assert.deepEqual(occurred.map((row) => row.date), [sleptFrom, middle, today]);
+const frozen = interestOf("interest:cny");
+accrueTodayInterest();
+assert.equal(interestOf("interest:cny"), frozen);
 
 db.close();
 fs.rmSync(temp, { recursive: true, force: true });

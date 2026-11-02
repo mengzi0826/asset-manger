@@ -52,7 +52,7 @@
 | `lib/history.ts` | 变动日志、每日快照、今日盈亏、价格历史 |
 | `lib/fx.ts` | 汇率拉取 / 换算 / 手动覆盖 |
 | `lib/stocks.ts` | 代码解析、行情刷新、刷新日志 |
-| `lib/time.ts` | 时区、8h 汇率、10:00/14:00 股票锚点 |
+| `lib/time.ts` | 时区、8h 汇率、三市开市与 15 分钟股票刷新 |
 | `lib/juheKeys.ts` | Key 解析 |
 | `lib/interest.ts` | 四项利息账户、日息入账 |
 | `lib/advisor.ts` | 总览建议规则 |
@@ -129,21 +129,21 @@ JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asse
 | `HK` + 数字，或 4–5 位数字 | 港股，`num` 补到 5 位 |
 | 字母（可去 `$`、`.US` 等后缀） | 美股 |
 
-端点：沪深 `.../hs?gid=`，港股 `.../hk?num=`，美股 `.../usa?gid=`。价格字段：沪深 `nowPri`，港美 `lastestpri`。涨跌幅接口是百分数（`0.13` = 0.13%），入库除以 100 成小数。
+行情走腾讯财经 `https://qt.gtimg.cn/q=`，一次请求逗号拼接全部持仓，不需要股票 AppKey。代码：沪深 `sh`/`sz` + 6 位，港股 `hk` + 5 位，美股 `us` + 代码。返回 GBK、`~` 分隔：现价 `[3]`，时间 `[30]`，涨跌额 `[31]`，涨跌幅 `[32]`（百分数，`0.13` = 0.13%，入库除以 100）。会话日取时间字段上的日历日，解析不到写 null。
 
 ### 刷新节奏
 
 `refreshStockPrices({ force })`：
 
-- **仅自动刷新**在北京周六日 `skipped: "weekend"`，不打接口。`force: true`（设置页手动刷新）周末仍会请求。
-- 非 force：未到当日 10:00 → `before_morning`；已拉过当前锚点 → `up_to_date`。
-- 锚点：10:00 与 14:00（`STOCK_REFRESH_HOURS_BEIJING`）。成功或失败只要实际请求过，就写 `last_stocks_refresh_at`。
+- 非 force：三市都休市 → `market_closed`；开市但距上次请求未满 15 分钟 → `up_to_date`。
+- 开市按北京时间：沪深 9:30–11:30、13:00–15:00；港股 9:30–12:00、13:00–16:00；美股为美东 9:30–16:00（含夏令时，因此北京周六凌晨仍可能在拉美股周五盘）。`shouldRefreshStocks` / `isAnyStockMarketOpen`。
+- 成功或失败只要实际请求过，就写 `last_stocks_refresh_at`（分钟精度，供 15 分钟间隔）。单市场手动刷新不推进这个水位。
 - 模块锁：同一进程只允许一次刷新在飞。
-- **失败分支不 `UPDATE`**。额度耗尽也不要提前 `break` 整批；后续标的仍各请求一次。
+- **失败分支不 `UPDATE`**。整批一次 HTTP，不要退回逐只请求。
 - 成功写入 `change_quote_date = quoteSessionYmd`（可为 null）。`stock_price_daily` 只用会话日，没有会话日就不要 upsert。
 - 整批 `updated_count === 0 && failed_count > 0` 时写 `last_stocks_refresh_error`；有成功则删除。
 
-`GET /api/stocks?refresh=1` 为强制（周末也会打接口）；可传 `market=hs|hk|us` 只刷新单一市场，单市场刷新不得推进全局 `last_stocks_refresh_at`。`maxDuration = 300`。
+`GET /api/stocks?refresh=1` 为强制（休市也会打接口）；可传 `market=hs|hk|us` 只刷新单一市场，单市场刷新不得推进全局 `last_stocks_refresh_at`。`maxDuration = 300`。
 
 ### 行情会话日盈亏
 
@@ -151,7 +151,7 @@ JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asse
 
 规则：
 
-- 沪深/港股仅 `change_quote_date === todayCn()` 的标的进入汇总；美股取当前持仓中最新的有效 `change_quote_date`，并在 UI 明示该交易日。空日期不计入，不同美股交易日禁止混算。
+- 沪深/港股仅 `change_quote_date === todayCn()` 的标的进入汇总；美股取北京今天/昨天范围内最新的有效 `change_quote_date`，并在 UI 明示该交易日。会话日最多保留至北京时间次日结束（周五行情周六可显示，周日和周一不得继续计入），有效期统一用 `isUsQuoteDateInDisplayWindow`。空日期不计入，不同美股交易日禁止混算。
 - 单价涨跌用落库的 `change_amount` / `change_percent`。
 - 股数用 `mapSecurityQuantityBeforeFirstEditToday`：从今日 `asset_change` 的 `quantity` diff 反推日初股数。当天减仓/清仓，已卖部分仍计入今日盈亏。已删除证券由当日删除日志的分类/行情快照补入候选；缺分类依据的旧日志不猜测。没有变更日志则用当前股数。
 - 没有可用会话日（含休市）：`availableTotalBase = null`，缺汇率不按 0 计入；`status` 区分 complete / partial / unavailable。总览「证券当日」和证券 KPI / 明细一律 **—**，不要渲染 `¥0.00`。
@@ -160,13 +160,13 @@ JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asse
 
 价格 sparkline：`listStockPriceHistory` 合并 `stock_price_daily`（优先）与 `asset_change` 里对 `current_price` 的修改。
 
-总览新鲜度：`app/_components/DataFreshness.tsx`，数据来自上次成功时间和两枚 `last_*_refresh_error`。过期判定复用 `shouldRefreshFxEvery8h` / `shouldRefreshStocksBy10And14`，不要在页面里再写一套。
+总览新鲜度：`app/_components/DataFreshness.tsx`，数据来自上次成功时间和两枚 `last_*_refresh_error`。过期判定复用 `shouldRefreshFxEvery8h` / `shouldRefreshStocks`，不要在页面里再写一套。
 
 ---
 
 ## 自动刷新怎么触发
 
-两条路径，都调用 `refreshRates(false)` / `refreshStockPrices({ force: false })`，因此 8h / 10–14 点规则仍然生效：
+两条路径，都调用 `refreshRates(false)` / `refreshStockPrices({ force: false })`，因此 8 小时汇率和 15 分钟开市股价规则仍然生效：
 
 1. `app/layout.tsx` 加载时 `startAutoRefreshScheduler()`，每 60s 一轮（`lib/autoRefresh.ts`），HMR 下靠 `globalThis` 防重复。
 2. 总览 / 资产 / 证券 / 设置 SSR 里 `kickoff*`，不阻塞首屏。
@@ -183,6 +183,7 @@ JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asse
 - 清仓 → `POST /api/assets/[id]/liquidate`（**删除**该资产行）。
 - 可选 `cash_asset_id`：必须是 `cash` 大类、同币种。买入扣款、卖出/清仓加款。不选则只改证券、不动现金。
 - 新建证券也可在 `POST /api/assets` 带 `cash_asset_id`，按 `quantity × unit_cost` 扣现金。
+- 记录交易面板下方的明细来自 `listSecurityTrades`：只读该证券在 `portfolio_event` 上的证券腿（增持、减持、分红、清仓，以及未扣现金的建仓）。禁止用 `asset_change` 反推。事件层上线前的操作不会出现在这张列表里。
 
 改仓必须走这些 API（或至少写 `asset_change`），否则今日盈亏的日初股数还原会失败。
 
@@ -202,7 +203,8 @@ JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asse
 - 人民币、港币、美元：对应币种的**全部现金**（含该币种利息账户）。
 - 加密货币：美元计价的**全部加密资产**（含加密货币利息账户）。存款、基金、证券不计。
 - 日息 = 本金 × 年化 / 365，四舍五入到分。每个北京日首次计息时锁定本金；利息账户余额次日复利。年化为 0，或四舍五入后为 0，不入账。
-- 当日修改利率按已锁定本金重算，差额调整利息账户和当日 `interest_income` 事件。
+- 进程没跑过的日期（关机、休眠）不在当时入账。下次 `accrueTodayInterest()` 从该桶上次 `interest_accrual` 的次日补到今天：按当时库内余额逐日复利，事件 `occurred_at` 写在对应北京日 12:00。没有历史入账时只记今天，不回补功能启用前。补记日之后再改利率，只重算今天。
+- 当日修改利率按已锁定本金重算，差额调整利息账户和当日 `interest_income` 事件。不补写错过日期的资产快照。
 - 自动账户在现金大类三个、加密货币大类一个。`account.notes` 为 `interest:cny|hkd|usd|crypto`，资产 ID 记在 `interest_asset_*`。缺失则重建。
 - 入账写 `interest_income`（`source=system`，`reason=利息收入`），`asset_change` 用 `cash_flow_type=interest`。`interest_accrual` 按日防重复。
 - 变化明细单列「利息收入」，并展开四项。余额对不上时仍不得把差额推断成利息。
@@ -264,10 +266,10 @@ JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asse
 
 价格/汇率没变时按这个顺序，不要先改节奏代码：
 
-1. 设置页两枚 Key 是否 configured；股票产品是否开通。总览是否已提示过期/失败。
-2. 是否周末（自动会跳过；手动仍可拉），或未到 10:00，或上午档已拉过、未到 14:00。
+1. 汇率 Key 是否 configured。股价不再使用股票 AppKey。总览是否已提示过期/失败。
+2. 三市是否都休市（自动会跳过；手动仍可拉），或距上次刷新未满 15 分钟。
 3. `symbol` 能否被 `parseStockSymbol` 识别。
-4. 终端是否 `ENOTFOUND`（Fake-IP）或聚合 `error_code`（Key/额度）。总览会显示上次错误。
+4. 终端是否 `ENOTFOUND`（Fake-IP）。总览会显示上次错误。
 5. 设置页股票失败日志（`stock_refresh_log`）。
 
-改刷新逻辑时：汇率只动 `shouldRefreshFxEvery8h`；股票只动 `shouldRefreshStocksBy10And14` / `isWeekendBeijing`。不要在页面里再写一套时间判断。
+改刷新逻辑时：汇率只动 `shouldRefreshFxEvery8h`；股票只动 `shouldRefreshStocks` / `isAnyStockMarketOpen`。不要在页面里再写一套时间判断。

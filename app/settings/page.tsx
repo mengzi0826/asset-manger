@@ -29,7 +29,7 @@ export default async function SettingsPage() {
   const rates = listRates();
   const stockItems = listSecuritiesForView();
   const lastStocksRefreshAt = getLastStocksRefreshAt();
-  const nextRefreshAt = nextStockAutoRefreshIso();
+  const nextRefreshAt = nextStockAutoRefreshIso(lastStocksRefreshAt);
   const stockRefreshFailures = listRecentStockRefreshLogs({ limit: 30, failuresOnly: true });
   const juheFxState = getFxKeyFieldState();
   const juheStockState = getStockKeyFieldState();
