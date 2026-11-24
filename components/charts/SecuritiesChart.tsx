@@ -101,7 +101,7 @@ export interface SecuritiesPosition {
 export interface SecuritiesPanelData {
   totalValue: number;
   totalCost: number;
-  unrealizedPnL: number;
+  unrealizedPnL: number | null;
   positionCount: number;
   currency: string;
   marketOpen: Partial<Record<MarketLabel, boolean>>;
@@ -427,7 +427,7 @@ export function SecuritiesPanel({
     pnlHistory,
     positions
   } = data;
-  const pnlUp = unrealizedPnL >= 0;
+  const pnlUp = unrealizedPnL != null && unrealizedPnL > 0;
 
   const pnlPosCount = positions.filter((p) => (p.pnlPct ?? 0) > 0).length;
   const pnlNegCount = positions.filter((p) => (p.pnlPct ?? 0) < 0).length;
@@ -453,11 +453,10 @@ export function SecuritiesPanel({
             <span className="text-ink-400">浮动盈亏</span>
             <span
               className={`tabular font-semibold ${
-                pnlUp ? "text-gain-700" : "text-loss-700"
+                unrealizedPnL == null || unrealizedPnL === 0 ? "text-ink-400" : pnlUp ? "text-gain-700" : "text-loss-700"
               }`}
             >
-              {pnlUp ? "+" : ""}
-              {compact(unrealizedPnL)}
+              {unrealizedPnL == null ? "—" : (pnlUp ? "+" : "") + compact(unrealizedPnL)}
             </span>
           </div>
           <div className="flex items-baseline gap-1.5">
@@ -616,8 +615,8 @@ function PositionRow({ p, isDark }: { p: SecuritiesPosition; isDark: boolean }) 
         {hasTotal ? pctStr(p.pnlPct!, 2) : "—"}
       </div>
       {/* 总盈亏（基准币） */}
-      <div className={`text-right tabular ${colorClass(totalUp, hasTotal)}`}>
-        {hasTotal && p.pnlBase != null
+      <div className={`text-right tabular ${colorClass((p.pnlBase ?? 0) >= 0, p.pnlBase != null)}`}>
+        {p.pnlBase != null
           ? (p.pnlBase >= 0 ? "+" : "") + compact(p.pnlBase)
           : "—"}
       </div>

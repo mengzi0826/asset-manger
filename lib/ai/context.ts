@@ -2,7 +2,7 @@ import "server-only";
 import { format, parseISO, subDays } from "date-fns";
 import { getDB, getSetting, type CategoryCode } from "../db";
 import { buildSuggestions } from "../advisor";
-import { convert, listRates } from "../fx";
+import { listRates } from "../fx";
 import { computeTodayStockPnL, summarizeFxImpact } from "../history";
 import {
   getPortfolioEventCoverage,
@@ -15,7 +15,7 @@ import { parseStockSymbol } from "../stocks";
 import { nowCn, todayCn } from "../time";
 import { resolveAnalysisPeriod } from "../analysisPeriod";
 import { summarizePortfolioPeriod } from "../analytics";
-import { valueAll } from "../valuation";
+import { summarizeFloatingProfit, valueAll } from "../valuation";
 import { AI_ACTION_LABELS, type AiAction } from "./types";
 
 const CATEGORY_LABELS: Record<CategoryCode, string> = {
@@ -402,14 +402,7 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
     byCategory: valuation.byCategory,
     baseCurrency
   });
-  const profitCandidates = securities.filter(asset => (asset.quantity ?? 0) > 0);
-  const knownProfits = profitCandidates.flatMap(asset => {
-    const profit = asset.profit_native == null ? null : convert(asset.profit_native, asset.currency, baseCurrency);
-    return profit == null ? [] : [profit];
-  });
-  const knownProfitSubtotal = knownProfits.reduce((sum, value) => sum + value, 0);
-  const floatingProfitComplete = knownProfits.length === profitCandidates.length;
-  const securityFloatingProfitBase = floatingProfitComplete ? knownProfitSubtotal : null;
+  const floatingProfit = summarizeFloatingProfit(securities);
 
   return {
     meta: {
@@ -471,9 +464,9 @@ export function buildAiPortfolioContext(action: AiAction, question?: string) {
       marketValueBase: round(
         securities.reduce((sum, asset) => sum + asset.base_value, 0)
       ),
-      floatingProfitBase: round(securityFloatingProfitBase),
-      floatingProfitStatus: floatingProfitComplete ? "complete" : knownProfits.length ? "partial" : "unavailable",
-      knownFloatingProfitSubtotal: knownProfits.length ? round(knownProfitSubtotal) : null,
+      floatingProfitBase: round(floatingProfit.total),
+      floatingProfitStatus: floatingProfit.status,
+      knownFloatingProfitSubtotal: round(floatingProfit.knownSubtotal),
       sessionMovers: sessionMovers.map((item) => ({
         name: item.name,
         symbol: item.symbol,

@@ -4,13 +4,17 @@ const fs = require("node:fs");
 const path = require("node:path");
 const ts = require("typescript");
 const { Module } = require("node:module");
-const filename = path.resolve(__dirname, "../lib/netWorthChange.ts");
-const compiled = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
-}).outputText;
-const fixtureModule = new Module(filename, module);
-fixtureModule._compile(compiled, filename);
-const { calculateNetWorthChange } = fixtureModule.exports;
+function load(name, stubs = {}) {
+  const filename = path.resolve(__dirname, `../lib/${name}.ts`);
+  const fixture = new Module(filename, module);
+  fixture.require = id => stubs[id] ?? require(id);
+  fixture._compile(ts.transpileModule(fs.readFileSync(filename, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+  }).outputText, filename);
+  return fixture.exports;
+}
+const historicalFx = load("historicalFxImpact");
+const { calculateNetWorthChange } = load("netWorthChange", { "./historicalFxImpact": historicalFx });
 const from = "2026-09-17", to = "2026-09-18";
 const at = date => `${date}T20:00:00+08:00`;
 const row = (id, category, native, extra = {}) => ({
@@ -101,6 +105,52 @@ test("old total-only snapshots never infer historical attribution", () => {
 test("missing rates and new currencies never use today's rates", () => {
   const r = calculate([row(1, "cash", 100)], [row(1, "cash", 100), row(2, "cash", 20, { currency: "USD", fx_rate: 7, base_value: 140 })]);
   assert.equal(amount(r, "unclassified"), 140); assert.equal(amount(r, "fx"), 0);
+});
+test("FX report and net-worth breakdown share currency and endpoint coverage", () => {
+  const Database = require("better-sqlite3");
+  const db = new Database(":memory:");
+  db.exec(fs.readFileSync(path.resolve(__dirname, "../lib/schema.sql"), "utf8"));
+  const { summarizeFxImpact } = load("history", {
+    "./db": { getDB: () => db },
+    "./fx": {}, "./valuation": {}, "./time": {}, "./stocks": {}, "./changeLog": {},
+    "./historicalFxImpact": historicalFx
+  });
+  const addSnapshot = db.prepare("INSERT INTO portfolio_snapshot(date,base_currency,total_value,created_at) VALUES(?,'CNY',?,?)");
+  const addValuation = db.prepare(`INSERT INTO asset_valuation_daily
+    (date,base_currency,asset_id,account_id,asset_name,category_code,currency,native_value,fx_rate,base_value,captured_at)
+    VALUES(?,'CNY',?,1,'fixture',?,?,?,?,?,?)`);
+  for (const [date, usdRate, hkdRate] of [[from, 7, 0.8], [to, 8, 0.9]]) {
+    addSnapshot.run(date, 100 * usdRate - 100 * hkdRate, at(date));
+    addValuation.run(date, 1, "cash", "USD", 100, usdRate, 100 * usdRate, at(date));
+    addValuation.run(date, 2, "cash", "USD", 100, null, 0, at(date));
+    addValuation.run(date, 3, "liability", "HKD", 100, hkdRate, 100 * hkdRate, at(date));
+  }
+  const snapshot = db.prepare("SELECT * FROM portfolio_snapshot WHERE date = ?");
+  const valuations = db.prepare("SELECT * FROM asset_valuation_daily WHERE date = ?");
+  function compare(expectedFx, expectedUnclassified) {
+    const report = summarizeFxImpact("CNY", from, to);
+    const change = calculate(valuations.all(from), valuations.all(to), [], {
+      previous: snapshot.get(from), current: snapshot.get(to)
+    });
+    assert.equal(amount(change, "fx"), expectedFx);
+    assert.equal(amount(change, "unclassified"), expectedUnclassified);
+    assert.ok(Math.abs(report.totalFxImpact - expectedFx) < 1e-8);
+    assert.ok(Math.abs(report.unclassifiedBaseValueChange - expectedUnclassified) < 1e-8);
+    return report.byCurrency;
+  }
+  const byCurrency = compare(-10, 100);
+  assert.equal(byCurrency.find(entry => entry.currency === "USD").comparable, false);
+  assert.equal(byCurrency.find(entry => entry.currency === "USD").fxImpact, null);
+  assert.equal(byCurrency.find(entry => entry.currency === "HKD").comparable, true);
+
+  // 两条估值分别能对账，但同一个币种的汇率互相冲突。
+  db.exec("UPDATE asset_valuation_daily SET fx_rate = 2, base_value = 200 WHERE asset_id = 2");
+  db.exec("UPDATE portfolio_snapshot SET total_value = total_value + 200");
+  assert.equal(compare(-10, 100).find(entry => entry.currency === "USD").comparable, false);
+
+  db.prepare("UPDATE portfolio_snapshot SET total_value = total_value + 20 WHERE date = ?").run(to);
+  assert.ok(compare(0, 110).every(entry => !entry.comparable));
+  db.close();
 });
 test("pre-coverage securities delta does not claim investment return", () => {
   const r = calculate([stock(2, 10, 10)], [stock(2, 10, 12)], [], { reliableFrom: at(to) });
@@ -194,21 +244,12 @@ test("batch history reads every event and retains the off-chart baseline", () =>
     "./time": { nowCn: () => at(to), todayCn: () => to },
     "./netWorthChange": { calculateNetWorthChange }
   };
-  const load = name => {
-    const file = path.resolve(__dirname, `../lib/${name}.ts`);
-    const compiledModule = new Module(file, module);
-    compiledModule.require = id => stubs[id] ?? require(id);
-    compiledModule._compile(ts.transpileModule(fs.readFileSync(file, "utf8"), {
-      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
-    }).outputText, file);
-    return compiledModule.exports;
-  };
-  stubs["./portfolioEvents"] = load("portfolioEvents");
+  stubs["./portfolioEvents"] = load("portfolioEvents", stubs);
   const { listPortfolioEvents } = stubs["./portfolioEvents"];
   assert.equal(listPortfolioEvents().length, 500);
   assert.equal(listPortfolioEvents({ limit: null }).length, 5001);
   assert.equal(listPortfolioEvents({ limit: 1 })[0].legs.length, 1);
-  const { buildNetWorthHistory } = load("netWorthHistory");
+  const { buildNetWorthHistory } = load("netWorthHistory", stubs);
   const history = buildNetWorthHistory(db.prepare("SELECT * FROM portfolio_snapshot WHERE date = ?").all(to));
   assert.equal(history.length, 1);
   assert.equal(history[0].change.from, from);

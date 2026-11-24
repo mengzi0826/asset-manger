@@ -259,6 +259,7 @@ JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asse
 - 资产列表 `?cat=` 用 `lib/assetsNav.ts` 回跳，不要把用户丢回「全部」。
 - 证券搜索：`GET /api/securities/search?q=`，东方财富 suggest，服务端 `undici`。
 - 一次性回填空 `symbol`：`scripts/backfill_symbols.mjs`（需 dev server）。
+- 历史页变动日志用 `listChangesPage`：默认近 30 个北京日（含今天）、每页 20 条，`logRange` / `logType` / `logFrom` / `logTo` / `logPage` 独立于净值曲线。类型只读 `asset_change` 的明确标记，不从份额变化猜买卖；`修改` 不含已明确分类的入金、消费、利息、分红。不要把这里的分页套到事件归因或盈亏计算上。
 
 ---
 

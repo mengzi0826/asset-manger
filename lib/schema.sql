@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS asset_change (
 
 CREATE INDEX IF NOT EXISTS idx_asset_change_time ON asset_change(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_asset_change_asset ON asset_change(asset_id);
+CREATE INDEX IF NOT EXISTS idx_asset_change_instant ON asset_change(julianday(created_at) DESC, id DESC);
 
 -- 统一资产事件：一条事件头对应多条资产腿，用于把证券与现金的联动操作关联起来
 CREATE TABLE IF NOT EXISTS portfolio_event (

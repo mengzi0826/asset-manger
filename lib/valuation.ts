@@ -22,7 +22,28 @@ export interface ValuedAsset extends AssetWithMeta {
   native_value: number;
   base_value: number;
   profit_native: number | null;
+  profit_base: number | null;
   profit_rate: number | null;
+}
+
+export function summarizeFloatingProfit(items: ValuedAsset[]) {
+  let total = 0;
+  let coveredCount = 0;
+  let positionCount = 0;
+  for (const item of items) {
+    if ((item.quantity ?? 0) <= 0) continue;
+    positionCount++;
+    if (item.profit_base != null) {
+      total += item.profit_base;
+      coveredCount++;
+    }
+  }
+  const complete = coveredCount === positionCount;
+  return {
+    total: complete ? total : null,
+    knownSubtotal: coveredCount > 0 ? total : null,
+    status: complete ? "complete" : coveredCount > 0 ? "partial" : "unavailable"
+  } as const;
 }
 
 export function listAssetsWithMeta(): AssetWithMeta[] {
@@ -61,6 +82,7 @@ export function valueAll(baseCurrency: string): {
   const valued: ValuedAsset[] = items.map((a) => {
     const native = computeAssetValue(a);
     const base = convert(native, a.currency, baseCurrency);
+    const profit = computeProfit(a);
     if (base == null) missingRates.add(`${a.currency}->${baseCurrency}`);
     const bv = base ?? 0;
     if (a.category_code === "liability") {
@@ -73,7 +95,8 @@ export function valueAll(baseCurrency: string): {
       ...a,
       native_value: native,
       base_value: bv,
-      profit_native: computeProfit(a),
+      profit_native: profit,
+      profit_base: profit == null ? null : convert(profit, a.currency, baseCurrency),
       profit_rate: computeProfitRate(a)
     };
   });

@@ -1,4 +1,5 @@
 import type { AssetValuationDaily, PortfolioSnapshot } from "./db";
+import { calculateHistoricalFxImpact, netValueSign } from "./historicalFxImpact";
 import type { PortfolioEvent } from "./portfolioEvents";
 
 export const CHANGE_LABELS = {
@@ -26,7 +27,6 @@ export interface NetWorthChange {
   notes: string[];
 }
 
-const sign = (category: string) => category === "liability" ? -1 : 1;
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
 const cents = (value: number) => Math.round((value + Math.sign(value) * Number.EPSILON) * 100);
@@ -62,10 +62,8 @@ export function calculateNetWorthChange(input: {
   const incomplete = (note: string) => { result.partial = true; notes.add(note); };
   const reliable = reliableFrom != null && reliableFrom <= previous.created_at;
   if (!reliable) incomplete("此区间早于可靠事件记录起点，无法确认的变化保留为未归因。");
-  const validEndpoint = (rows: AssetValuationDaily[], snapshot: PortfolioSnapshot) =>
-    rows.length > 0 && Math.abs(rows.reduce((sum, row) => sum + sign(row.category_code) * row.base_value, 0) - snapshot.total_value) < 0.01;
-  // 空明细无法区分“空仓”与旧版快照缺数据，保守保留缺口。
-  const detailed = validEndpoint(previousAssets, previous) && validEndpoint(currentAssets, current);
+  const { covered: detailed, byCurrency, averageRates: rates } =
+    calculateHistoricalFxImpact(previousAssets, currentAssets, previous.total_value, current.total_value);
   if (!detailed) incomplete("快照缺少完整的逐资产估值，无法拆分的差额保留为未归因。");
 
   const before = new Map(previousAssets.map(row => [row.asset_id, row]));
@@ -76,22 +74,14 @@ export function calculateNetWorthChange(input: {
   const blocked = new Set<number>();
   const created = new Set<number>();
   const deleted = new Set<number>();
-  const rates = new Map<string, number>();
   const hints = new Map<number, { currency: string; category: string }>();
 
-  for (const currency of new Set([...previousAssets, ...currentAssets].map(row => row.currency))) {
-    const left = previousAssets.filter(row => row.currency === currency);
-    const right = currentAssets.filter(row => row.currency === currency);
-    const lRate = left[0]?.fx_rate, rRate = right[0]?.fx_rate;
-    const valid = (rows: AssetValuationDaily[], rate: number | null | undefined) =>
-      finite(rate) && rate > 0 && rows.every(row => row.fx_rate === rate && near(row.native_value * rate, row.base_value));
-    if (!detailed || !left.length || !right.length || !valid(left, lRate) || !valid(right, rRate)) {
-      incomplete("新增或消失的币种、缺失的历史汇率不做推算。");
-      continue;
+  for (const { fxImpact } of byCurrency) {
+    if (fxImpact == null) {
+      incomplete("部分币种缺少可对账的两端估值或历史汇率，差额保留为未归因。");
+    } else {
+      add("fx", fxImpact);
     }
-    const native = (rows: AssetValuationDaily[]) => rows.reduce((sum, row) => sum + sign(row.category_code) * row.native_value, 0);
-    add("fx", (native(left) + native(right)) / 2 * (rRate! - lRate!));
-    rates.set(currency, (lRate! + rRate!) / 2);
   }
 
   const events = input.events.filter(event => event.occurredAt.slice(0, 10) > previous.date &&
@@ -176,7 +166,7 @@ export function calculateNetWorthChange(input: {
       if (event.grossAmount === 0 && (leg.quantityDelta ?? 0) !== 0 && (leg.unitPrice ?? 0) > 0) { fail(); continue; }
       const direction = event.type === "asset_created" ? 1 : -1;
       const amount = direction * event.grossAmount;
-      add(category === "liability" ? "liability" : direction === 1 ? "created" : "deleted", sign(category) * amount * rate);
+      add(category === "liability" ? "liability" : direction === 1 ? "created" : "deleted", netValueSign(category) * amount * rate);
       affect(leg.assetId!, amount, leg.quantityDelta ?? 0);
       (direction === 1 ? created : deleted).add(leg.assetId!);
     } else if (event.type === "manual_adjustment") {
@@ -190,7 +180,7 @@ export function calculateNetWorthChange(input: {
       if (finite(oldValue) && finite(newValue) && meta?.currency_before === event.currency && meta?.currency_after === event.currency &&
         typeof meta?.category_before === "string" && typeof meta?.category_after === "string") {
         add(meta.category_before === "liability" && meta.category_after === "liability" ? "liability" : "adjustment",
-          (sign(meta.category_after) * newValue - sign(meta.category_before) * oldValue) * rate);
+          (netValueSign(meta.category_after) * newValue - netValueSign(meta.category_before) * oldValue) * rate);
         affect(leg.assetId!, newValue - oldValue, leg.quantityDelta ?? 0);
         if (meta.category_before !== meta.category_after || changes?.symbol) blocked.add(leg.assetId!);
       } else if (category && oldRow && newRow && oldRow.category_code === newRow.category_code &&
@@ -198,7 +188,7 @@ export function calculateNetWorthChange(input: {
         finite(changes.amount.from) && finite(changes.amount.to) &&
         Object.keys(changes).every(key => ["amount", "unit_cost", "current_price"].includes(key))) {
         const amount = changes.amount.to - changes.amount.from;
-        add(category === "liability" ? "liability" : "adjustment", sign(category) * amount * rate);
+        add(category === "liability" ? "liability" : "adjustment", netValueSign(category) * amount * rate);
         affect(leg.assetId!, amount);
       } else if (changes && Object.keys(changes).every(key => key === "account_name")) {
         // 改账户名称不影响估值。

@@ -486,8 +486,6 @@ function computeKpis(items: ValuedAsset[]) {
   let invested = 0;
   let crypto = 0;
   let liabilityCount = 0;
-  let unrealized = 0;
-  let investedCost = 0;
   let yieldWeighted = 0;
   let yieldDenom = 0;
   let yieldingCount = 0;
@@ -505,13 +503,6 @@ function computeKpis(items: ValuedAsset[]) {
       invested += a.base_value;
     }
 
-    if (a.unit_cost != null && a.current_price != null) {
-      const costBase = a.unit_cost * (a.quantity ?? 0);
-      const unrealNative = (a.current_price - a.unit_cost) * (a.quantity ?? 0);
-      const ratio = a.native_value !== 0 ? a.base_value / a.native_value : 1;
-      investedCost += costBase * ratio;
-      unrealized += unrealNative * ratio;
-    }
     if (a.annual_rate != null && a.annual_rate > 0) {
       yieldWeighted += a.annual_rate * a.base_value;
       yieldDenom += a.base_value;
@@ -523,8 +514,6 @@ function computeKpis(items: ValuedAsset[]) {
     invested,
     crypto,
     liabilityCount,
-    unrealized,
-    investedCost,
     weightedYield: yieldDenom > 0 ? yieldWeighted / yieldDenom : null,
     yieldingCount,
     cryptoCount: items.filter((a) => a.category_code === "crypto").length

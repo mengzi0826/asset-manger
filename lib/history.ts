@@ -9,25 +9,39 @@ import { convert, getRate } from "./fx";
 import { computeAssetValue, valueAll } from "./valuation";
 import { isUsQuoteDateInDisplayWindow, nowCn, todayCn } from "./time";
 import { parseStockSymbol } from "./stocks";
+import { CHANGE_LOG_PAGE_SIZE, type ChangeLogFilters } from "./changeLog";
+import { calculateHistoricalFxImpact, type FxImpactEntry } from "./historicalFxImpact";
+
+const CHANGE_INSTANT = "julianday(created_at)";
+
+/** 变动日志的日期筛选以北京午夜为边界，兼容旧无时区 UTC 与带偏移时间戳。 */
+function changeDateRange(from?: string, to?: string) {
+  const clauses: string[] = [];
+  const args: string[] = [];
+  if (from) {
+    clauses.push(`${CHANGE_INSTANT} >= julianday(?)`);
+    args.push(`${from}T00:00:00+08:00`);
+  }
+  if (to) {
+    clauses.push(`${CHANGE_INSTANT} < julianday(?, '+1 day')`);
+    args.push(`${to}T00:00:00+08:00`);
+  }
+  return { clauses, args };
+}
 
 /**
  * 从今天第一条「份额变更」记录反推「今日第一次改仓前」的持仓股数。
  *
- * 用途：今日盈亏按接口的 `change_amount`（相对昨收的单价涨跌）计算时，
- * 应乘以**今日日初总股数**（含当日已卖出的部分），否则减只会留在剩余持仓上计算，会漏掉已卖部分的当日浮盈。
- *
- * 算法：拉取今日内、按时间正序的 quantity 变更，从**当前股数**往回摊：`to` 与当前一致则 `from` 为上一档，重复直到最早一条。
- * 无今日份额变动时，日初股数 = 当前股数。
- *
- * 限制：若直接改库、或未走 API 导致无 `asset_change`，则无法还原，回落为当前股数。
+ * 取北京日内最早有效的 quantity 变更前值，包含当天已卖出的份额。
+ * 无有效变更记录时使用当前股数。
  */
 export function mapSecurityQuantityBeforeFirstEditToday(
   assetIds: number[],
   currentQtyById: Map<number, number>
 ): Map<number, number> {
-  const out = new Map<number, number>();
-  if (assetIds.length === 0) return out;
-  const t = todayCn();
+  if (assetIds.length === 0) return new Map();
+  const today = todayCn();
+  const { clauses, args } = changeDateRange(today, today);
   const db = getDB();
   const ph = assetIds.map(() => "?").join(",");
   const rows = db
@@ -36,48 +50,26 @@ export function mapSecurityQuantityBeforeFirstEditToday(
        FROM asset_change
        WHERE asset_id IN (${ph})
          AND action = 'update'
-         AND substr(created_at, 1, 10) = ?
-         AND json_extract(field_changes, '$.quantity.from') IS NOT NULL
-         AND json_extract(field_changes, '$.quantity.to') IS NOT NULL
-       ORDER BY asset_id, created_at ASC, id ASC`
+         AND ${clauses.join(" AND ")}
+         AND CASE WHEN json_valid(field_changes) THEN
+               json_extract(field_changes, '$.quantity.from') IS NOT NULL
+               AND json_extract(field_changes, '$.quantity.to') IS NOT NULL
+             END
+       ORDER BY asset_id, ${CHANGE_INSTANT} ASC, id ASC`
     )
-    .all(...assetIds, t) as Array<{ asset_id: number; field_changes: string }>;
+    .all(...assetIds, ...args) as Array<{ asset_id: number; field_changes: string }>;
 
-  const grouped = new Map<number, Array<string>>();
-  for (const r of rows) {
-    const list = grouped.get(r.asset_id) ?? [];
-    list.push(r.field_changes);
-    grouped.set(r.asset_id, list);
+  const firstQuantity = new Map<number, number>();
+  for (const row of rows) {
+    if (firstQuantity.has(row.asset_id)) continue;
+    const { quantity } = JSON.parse(row.field_changes) as { quantity: { from: unknown; to: unknown } };
+    const { from, to } = quantity;
+    if ((typeof from !== "number" && typeof from !== "string") ||
+        (typeof to !== "number" && typeof to !== "string")) continue;
+    const previous = Number(from);
+    if (Number.isFinite(previous) && Number.isFinite(Number(to))) firstQuantity.set(row.asset_id, previous);
   }
-
-  const EPS = 1e-6;
-  for (const id of assetIds) {
-    let q = currentQtyById.get(id) ?? 0;
-    const list = grouped.get(id);
-    if (!list || list.length === 0) {
-      out.set(id, q);
-      continue;
-    }
-    for (let i = list.length - 1; i >= 0; i--) {
-      try {
-        const fc = JSON.parse(list[i]) as Record<string, { from?: unknown; to?: unknown }>;
-        const diff = fc.quantity;
-        if (!diff) continue;
-        const toN = Number(diff.to);
-        const fromN = Number(diff.from);
-        if (!Number.isFinite(fromN) || !Number.isFinite(toN)) continue;
-        if (Math.abs(toN - q) <= EPS) {
-          q = fromN;
-        } else {
-          q = fromN;
-        }
-      } catch {
-        /* skip malformed row */
-      }
-    }
-    out.set(id, q);
-  }
-  return out;
+  return new Map(assetIds.map(id => [id, firstQuantity.get(id) ?? currentQtyById.get(id) ?? 0]));
 }
 
 /** 单只股票的「行情会话日盈亏」分项数据（来自股票行情接口落库的当日涨跌字段） */
@@ -173,8 +165,44 @@ export function logAssetChange(params: {
 export function listChanges(limit = 200): AssetChange[] {
   const db = getDB();
   return db
-    .prepare("SELECT * FROM asset_change ORDER BY created_at DESC, id DESC LIMIT ?")
+    .prepare(`SELECT * FROM asset_change ORDER BY ${CHANGE_INSTANT} DESC, id DESC LIMIT ?`)
     .all(limit) as AssetChange[];
+}
+
+export interface ChangeLogPage {
+  changes: AssetChange[];
+  total: number;
+  page: number;
+  pageCount: number;
+}
+
+/** 仅供历史页日志展示；总览最近变动、事件归因和盈亏计算不使用这里的分页。 */
+export function listChangesPage(filters: ChangeLogFilters): ChangeLogPage {
+  if (filters.error) return { changes: [], total: 0, page: 1, pageCount: 1 };
+  const db = getDB();
+  const { clauses: where, args } = changeDateRange(filters.from, filters.to);
+  if (filters.type !== "all") {
+    // 与 getChangeLogType 保持一致；损坏的旧 JSON 回落为普通修改，不能阻断查询。
+    where.push(`(CASE
+      WHEN action <> 'update' THEN action
+      WHEN json_valid(field_changes) THEN CASE
+        WHEN json_extract(field_changes, '$.cash_flow_type.to') IN ('deposit', 'expense', 'interest')
+          THEN json_extract(field_changes, '$.cash_flow_type.to')
+        WHEN json_type(field_changes, '$.dividend_amount.to') IN ('integer', 'real') THEN 'dividend'
+        ELSE 'update' END
+      ELSE 'update' END) = ?`);
+    args.push(filters.type);
+  }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  return db.transaction(() => {
+    const { total } = db.prepare(`SELECT COUNT(*) AS total FROM asset_change ${whereSql}`).get(...args) as { total: number };
+    const pageCount = Math.max(1, Math.ceil(total / CHANGE_LOG_PAGE_SIZE));
+    const page = Math.min(filters.page, pageCount);
+    const changes = db.prepare(`SELECT * FROM asset_change ${whereSql}
+      ORDER BY ${CHANGE_INSTANT} DESC, id DESC LIMIT ? OFFSET ?`)
+      .all(...args, CHANGE_LOG_PAGE_SIZE, (page - 1) * CHANGE_LOG_PAGE_SIZE) as AssetChange[];
+    return { changes, total, page, pageCount };
+  })();
 }
 
 export interface CashFlowEntry {
@@ -315,20 +343,6 @@ export function listAssetValuations(
     .all(...params) as AssetValuationDaily[];
 }
 
-export interface FxImpactEntry {
-  currency: string;
-  previousNativeValue: number;
-  currentNativeValue: number;
-  previousRate: number | null;
-  currentRate: number | null;
-  baseValueChange: number;
-  /** 对称分解：平均原币敞口 × 汇率变化。 */
-  fxImpact: number | null;
-  /** 对称分解：原币价值变化 × 平均汇率；其中仍包含交易、资金流和市场波动。 */
-  nativeValueImpact: number | null;
-  comparable: boolean;
-}
-
 export interface FxImpactSummary {
   baseCurrency: string;
   from: string;
@@ -363,7 +377,7 @@ export function summarizeFxImpact(
     .all(baseCurrency.toUpperCase(), from, to) as Array<{
       date: string;
       currency: string;
-      category_code: string;
+      category_code: AssetValuationDaily["category_code"];
       native_value: number;
       fx_rate: number | null;
       base_value: number;
@@ -380,69 +394,20 @@ export function summarizeFxImpact(
     }>;
   const previousSnapshot = snapshots.find((row) => row.date === from);
   const currentSnapshot = snapshots.find((row) => row.date === to);
-  const hasPreviousValuation = rows.some((row) => row.date === from);
-  const hasCurrentValuation = rows.some((row) => row.date === to);
-
-  type Side = { present: boolean; native: number; base: number; rate: number | null };
-  const buckets = new Map<string, { previous: Side; current: Side }>();
-  const emptySide = (): Side => ({ present: false, native: 0, base: 0, rate: null });
-  for (const row of rows) {
-    const bucket = buckets.get(row.currency) ?? {
-      previous: emptySide(),
-      current: emptySide()
-    };
-    const side = row.date === from ? bucket.previous : bucket.current;
-    const sign = row.category_code === "liability" ? -1 : 1;
-    side.present = true;
-    side.native += sign * row.native_value;
-    side.base += sign * row.base_value;
-    if (row.fx_rate != null) side.rate = row.fx_rate;
-    buckets.set(row.currency, bucket);
-  }
-
-  let detailedBaseValueChange = 0;
+  const previousRows = rows.filter((row) => row.date === from);
+  const currentRows = rows.filter((row) => row.date === to);
+  const { byCurrency, totalBaseValueChange } = calculateHistoricalFxImpact(
+    previousRows, currentRows, previousSnapshot?.total_value, currentSnapshot?.total_value
+  );
   let totalFxImpact = 0;
   let totalNativeValueImpact = 0;
   let comparableBaseValueChange = 0;
-  const byCurrency: FxImpactEntry[] = [];
-  for (const [currency, { previous, current }] of buckets) {
-    const baseValueChange = current.base - previous.base;
-    detailedBaseValueChange += baseValueChange;
-    const comparable =
-      previous.present &&
-      current.present &&
-      previous.rate != null &&
-      current.rate != null;
-    let fxImpact: number | null = null;
-    let nativeValueImpact: number | null = null;
-    if (comparable) {
-      fxImpact =
-        ((previous.native + current.native) / 2) * (current.rate! - previous.rate!);
-      nativeValueImpact =
-        (current.native - previous.native) * ((previous.rate! + current.rate!) / 2);
-      totalFxImpact += fxImpact;
-      totalNativeValueImpact += nativeValueImpact;
-      comparableBaseValueChange += baseValueChange;
-    }
-    byCurrency.push({
-      currency,
-      previousNativeValue: previous.native,
-      currentNativeValue: current.native,
-      previousRate: previous.rate,
-      currentRate: current.rate,
-      baseValueChange,
-      fxImpact,
-      nativeValueImpact,
-      comparable
-    });
+  for (const entry of byCurrency) {
+    totalFxImpact += entry.fxImpact ?? 0;
+    totalNativeValueImpact += entry.nativeValueImpact ?? 0;
+    if (entry.comparable) comparableBaseValueChange += entry.baseValueChange;
   }
   byCurrency.sort((a, b) => Math.abs(b.baseValueChange) - Math.abs(a.baseValueChange));
-
-  // 总净值优先取组合快照。旧库可能只有总快照而没有逐资产历史，差额会完整落入未归因。
-  const totalBaseValueChange =
-    previousSnapshot && currentSnapshot
-      ? currentSnapshot.total_value - previousSnapshot.total_value
-      : detailedBaseValueChange;
 
   return {
     baseCurrency: baseCurrency.toUpperCase(),
@@ -450,8 +415,8 @@ export function summarizeFxImpact(
     to,
     hasPreviousSnapshot: previousSnapshot != null,
     hasCurrentSnapshot: currentSnapshot != null,
-    hasPreviousValuation,
-    hasCurrentValuation,
+    hasPreviousValuation: previousRows.length > 0,
+    hasCurrentValuation: currentRows.length > 0,
     totalBaseValueChange,
     totalFxImpact,
     totalNativeValueImpact,
@@ -527,9 +492,10 @@ export function computeTodayStockPnL(
   // 清仓会删除当前资产，必须从当天删除记录保留的状态取回计算候选。
   // 旧记录若没有分类依据，不猜测；不合并已复用 ID 的旧历史。
   const existingIds = new Set(items.map(item => item.id));
+  const { clauses, args } = changeDateRange(today, today);
   const removed = getDB().prepare(`SELECT asset_id, snapshot FROM asset_change
-    WHERE action = 'delete' AND substr(created_at, 1, 10) = ?
-    ORDER BY id DESC`).all(today) as Array<{ asset_id: number; snapshot: string | null }>;
+    WHERE action = 'delete' AND ${clauses.join(" AND ")}
+    ORDER BY ${CHANGE_INSTANT} DESC, id DESC`).all(...args) as Array<{ asset_id: number; snapshot: string | null }>;
   const closed = new Map<number, AssetRow>();
   for (const row of removed) {
     if (existingIds.has(row.asset_id) || closed.has(row.asset_id) || !row.snapshot) continue;
@@ -628,7 +594,7 @@ export function computeTodayStockPnL(
 
 /**
  * 从 asset_change 里提取每只股票的历史价格点。
- * 同一天若多次更新过 current_price，取**最后一次写入**（按 created_at, id 倒序），
+ * 同一北京日若多次更新过 current_price，按实际变更时刻和 ID 取最后一条，
  * 而不是取当天最高价 —— sparkline 反映"收盘价"语义。
  */
 export function listStockPriceHistory(
@@ -639,37 +605,31 @@ export function listStockPriceHistory(
   const ph = assetIds.map(() => "?").join(",");
   // 合并两个来源：stock_price_daily（自动刷新写入，永久保留）+ asset_change（手动编辑写入）。
   // 同一 (asset_id, date) 优先取 stock_price_daily（priority=1），其次取 asset_change（priority=2）。
-  // asset_change 先在子查询内按 id DESC 去重（同天多次编辑取最后一次），再参与 UNION。
   const rows = db
     .prepare(
-      `SELECT asset_id, date, price FROM (
+      `WITH manual_prices AS (
+         SELECT asset_id,
+                date(${CHANGE_INSTANT}, '+8 hours') AS date,
+                ${CHANGE_INSTANT} AS changed_at,
+                id,
+                CAST(CASE WHEN json_valid(field_changes) THEN json_extract(field_changes, '$.current_price.to') END AS REAL) AS price
+         FROM asset_change
+         WHERE asset_id IN (${ph}) AND action = 'update'
+       )
+       SELECT asset_id, date, price FROM (
          SELECT asset_id, date, price,
                 ROW_NUMBER() OVER (
                   PARTITION BY asset_id, date
-                  ORDER BY priority ASC
+                  ORDER BY priority ASC, changed_at DESC, id DESC
                 ) AS rn
          FROM (
-           SELECT asset_id, date, price, 1 AS priority
+           SELECT asset_id, date, price, 1 AS priority, NULL AS changed_at, NULL AS id
            FROM stock_price_daily
            WHERE asset_id IN (${ph})
            UNION ALL
-           SELECT asset_id,
-                  substr(created_at, 1, 10) AS date,
-                  CAST(json_extract(field_changes, '$.current_price.to') AS REAL) AS price,
-                  2 AS priority
-           FROM (
-             SELECT asset_id, created_at,
-                    field_changes,
-                    ROW_NUMBER() OVER (
-                      PARTITION BY asset_id, substr(created_at, 1, 10)
-                      ORDER BY id DESC
-                    ) AS rn2
-             FROM asset_change
-             WHERE asset_id IN (${ph})
-               AND action = 'update'
-               AND json_extract(field_changes, '$.current_price.to') IS NOT NULL
-           )
-           WHERE rn2 = 1
+           SELECT asset_id, date, price, 2 AS priority, changed_at, id
+           FROM manual_prices
+           WHERE date IS NOT NULL AND price IS NOT NULL
          )
        )
        WHERE rn = 1

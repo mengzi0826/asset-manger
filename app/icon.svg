@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 38 38">
+  <title>资产管家</title>
+  <rect width="38" height="38" rx="11" fill="#6794EF"/>
+  <g transform="translate(7 7)" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 3v16a2 2 0 0 0 2 2h16"/>
+    <path d="M8 17v-3"/>
+    <path d="M13 17V5"/>
+    <path d="M18 17V9"/>
+  </g>
+</svg>

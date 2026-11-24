@@ -1,42 +1,30 @@
 import { PageHeader } from "@/components/PageHeader";
 import { getSetting } from "@/lib/db";
 import { kickoffRatesRefresh } from "@/lib/fx";
-import { ensureTodaySnapshot, listChanges, listSnapshots } from "@/lib/history";
+import { ensureTodaySnapshot, listChangesPage, listSnapshots } from "@/lib/history";
 import { HistoryChart } from "@/components/charts/HistoryChart";
 import { buildNetWorthHistory } from "@/lib/netWorthHistory";
-import { formatDate, formatMoney, formatPercent, formatCnDateTime } from "@/lib/utils";
+import { formatDate, formatMoney, formatPercent } from "@/lib/utils";
 import { accrueTodayInterest } from "@/lib/interest";
+import { parseChangeLogFilters, type HistorySearchParams } from "@/lib/changeLog";
 import { RecordSnapshotButton } from "./_components/RecordSnapshotButton";
+import { ChangeLog } from "./_components/ChangeLog";
 
 export const dynamic = "force-dynamic";
 
-const FIELD_LABELS: Record<string, string> = {
-  name: "名称",
-  currency: "货币",
-  quantity: "份额",
-  unit_cost: "买入均价",
-  dividend_amount: "本次分红到账",
-  cash_flow_type: "现金操作",
-  cash_flow_amount: "现金流金额",
-  cash_flow_reason: "现金流原因",
-  interest_annual_rate: "年化利率",
-  interest_principal: "计息本金",
-  current_price: "当前价",
-  amount: "金额",
-  annual_rate: "年化",
-  start_date: "起息日",
-  maturity_date: "到期日",
-  notes: "备注"
-};
-
-export default async function HistoryPage() {
+export default async function HistoryPage({ searchParams = {} }: { searchParams?: HistorySearchParams }) {
   kickoffRatesRefresh();
   accrueTodayInterest();
   const baseCurrency = (getSetting("base_currency") ?? "CNY").toUpperCase();
   ensureTodaySnapshot(baseCurrency);
   const snapshots = listSnapshots(baseCurrency, 3650);
   const historyPoints = buildNetWorthHistory(snapshots);
-  const changes = listChanges(500);
+  const filters = parseChangeLogFilters(searchParams);
+  const changes = listChangesPage(filters);
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(searchParams)) {
+    for (const item of Array.isArray(value) ? value : value == null ? [] : [value]) query.append(key, item);
+  }
 
   const first = snapshots[0];
   const last = snapshots[snapshots.length - 1];
@@ -75,73 +63,7 @@ export default async function HistoryPage() {
         </div>
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <div className="card-title">变动日志</div>
-          <span className="chip tabular">{changes.length} 条</span>
-        </div>
-        <div className="card-body">
-          {changes.length === 0 ? (
-            <div className="py-8 text-center text-[14px] text-ink-400">暂无变动记录</div>
-          ) : (
-            <ul className="history-log">
-              {changes.map((c) => {
-                const fieldChanges: Record<string, { from: unknown; to: unknown }> = c.field_changes
-                  ? JSON.parse(c.field_changes)
-                  : {};
-                const flowType = fieldChanges.cash_flow_type?.to;
-                const isInterest = flowType === "interest";
-                return (
-                  <li key={c.id} className="py-3">
-                    <div className="flex flex-wrap items-center gap-2.5 text-[14px]">
-                      <span
-                        className={`chip ${
-                          isInterest || c.action === "create"
-                            ? "chip-gain"
-                            : c.action === "delete"
-                              ? "chip-loss"
-                              : "chip-info"
-                        }`}
-                      >
-                        {isInterest ? "利息收入" : c.action === "create" ? "新增" : c.action === "delete" ? "删除" : "修改"}
-                      </span>
-                      <span className="font-medium text-ink-900">
-                        {c.asset_name ?? `#${c.asset_id ?? "-"}`}
-                      </span>
-                      <span className="tabular text-[12px] text-ink-400">
-                        {formatCnDateTime(c.created_at)}
-                      </span>
-                      {c.base_value_cny != null && (
-                        <span className="tabular ml-auto text-[13px] text-ink-500">
-                          ≈ {formatMoney(c.base_value_cny, "CNY")}
-                        </span>
-                      )}
-                    </div>
-                    {c.action === "update" && Object.keys(fieldChanges).length > 0 && (
-                      <ul className="mt-2 space-y-1 rounded-md bg-canvas-sunk/60 p-2.5 text-[13px] text-ink-600">
-                        {Object.entries(fieldChanges).map(([field, diff]) => (
-                          <li key={field} className="flex flex-wrap items-center gap-1.5">
-                            <span className="min-w-[70px] text-ink-400">
-                              {FIELD_LABELS[field] ?? field}
-                            </span>
-                            <span className="tabular rounded border border-loss-100 bg-loss-50 px-1.5 py-0.5 text-loss-700 line-through">
-                              {renderValue(diff.from, field)}
-                            </span>
-                            <span className="text-ink-300">→</span>
-                            <span className="tabular rounded border border-gain-100 bg-gain-50 px-1.5 py-0.5 text-gain-700">
-                              {renderValue(diff.to, field)}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      </div>
+      <ChangeLog filters={filters} result={changes} query={query.toString()} />
     </div>
   );
 }
@@ -168,14 +90,4 @@ function SummaryCell({
       </div>
     </div>
   );
-}
-
-function renderValue(v: unknown, field: string): string {
-  if (v == null || v === "") return "—";
-  if (field === "start_date" || field === "maturity_date") return formatDate(String(v));
-  if (field === "cash_flow_type") return v === "deposit" ? "入金" : v === "expense" ? "消费" : v === "interest" ? "利息收入" : String(v);
-  if (field === "interest_annual_rate" && typeof v === "number") return `${(v * 100).toFixed(2)}%`;
-  if (field === "dividend_amount" && typeof v === "number") return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  if (typeof v === "number") return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
-  return String(v);
 }

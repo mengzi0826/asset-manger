@@ -5,7 +5,7 @@ import { getSetting } from "@/lib/db";
 import { convert, kickoffRatesRefresh } from "@/lib/fx";
 import { kickoffStockPricesRefresh, parseStockSymbol } from "@/lib/stocks";
 import { todayCn, isWeekendBeijing, isHsMarketOpen, isHkMarketOpen, isUsMarketOpen } from "@/lib/time";
-import { valueAll } from "@/lib/valuation";
+import { summarizeFloatingProfit, valueAll } from "@/lib/valuation";
 import {
   computeTodayStockPnL,
   listSecuritiesBreakdown,
@@ -60,26 +60,21 @@ export default async function SecuritiesPage() {
     new Map(secItems.map((a) => [a.id, a.quantity ?? 0]))
   );
 
-  let secTotalCost = 0;
-  let secUnrealized = 0;
+  const floatingProfit = summarizeFloatingProfit(secItems);
+  const secUnrealized = floatingProfit.total ?? floatingProfit.knownSubtotal;
+  const secTotalCost = secItems.reduce((sum, asset) => {
+    if (asset.unit_cost == null) return sum;
+    return sum + (convert(asset.unit_cost * (asset.quantity ?? 0), asset.currency, baseCurrency) ?? 0);
+  }, 0);
+  const floatingProfitHint = {
+    complete: secUnrealized != null && secTotalCost > 0
+      ? `成本回报 ${formatPercent(secUnrealized / secTotalCost, 2)}`
+      : "暂无成本数据",
+    partial: "部分覆盖",
+    unavailable: "缺少成本、价格或汇率"
+  }[floatingProfit.status];
 
   const secPositions: SecuritiesPosition[] = secItems.map((a) => {
-    const pnlNative =
-      a.unit_cost != null && a.current_price != null
-        ? (a.current_price - a.unit_cost) * (a.quantity ?? 0)
-        : null;
-    const pnlPct =
-      a.unit_cost != null && a.unit_cost > 0 && a.current_price != null
-        ? (a.current_price - a.unit_cost) / a.unit_cost
-        : null;
-    const fxRatio = a.native_value !== 0 ? a.base_value / a.native_value : 1;
-    if (a.unit_cost != null) {
-      secTotalCost += a.unit_cost * (a.quantity ?? 0) * fxRatio;
-    }
-    if (pnlNative != null) {
-      secUnrealized += pnlNative * fxRatio;
-    }
-    const pnlBase = pnlNative != null ? pnlNative * fxRatio : null;
     const stockInfo = stockInfoByAssetId.get(a.id);
     const todayEntry = todayPnL.perAsset.get(a.id);
     return {
@@ -92,9 +87,9 @@ export default async function SecuritiesPage() {
       unitCost: a.unit_cost,
       quantity: a.quantity ?? 0,
       baseValue: a.base_value,
-      pnlNative,
-      pnlBase,
-      pnlPct,
+      pnlNative: a.profit_native,
+      pnlBase: a.profit_base,
+      pnlPct: a.profit_rate,
       quoteDate: todayEntry?.quoteDate ?? null,
       todayChangePct: todayEntry?.todayChangePct ?? null,
       todayPnLBase: todayEntry?.todayPnLBase ?? null,
@@ -103,7 +98,7 @@ export default async function SecuritiesPage() {
   });
 
   const totalValue = valuation.byCategory.securities ?? 0;
-  const pnlUp = secUnrealized >= 0;
+  const pnlUp = secUnrealized != null && secUnrealized > 0;
   const secHoldingsWithQty = secItems.filter((a) => (a.quantity ?? 0) > 0);
   const hasSecuritiesForTodayKpi = secHoldingsWithQty.length > 0 || todayPnL.closedPositionCount > 0;
   const todayPnLValue = todayPnL.totalBase;
@@ -207,14 +202,10 @@ export default async function SecuritiesPage() {
             />
             <KpiCard
               label="浮动盈亏"
-              value={(pnlUp ? "+" : "") + formatMoney(secUnrealized, baseCurrency, 0)}
-              sub={
-                secTotalCost > 0
-                  ? `成本回报 ${formatPercent(secUnrealized / secTotalCost, 2)}`
-                  : "暂无成本数据"
-              }
+              value={secUnrealized == null ? "—" : (pnlUp ? "+" : "") + formatMoney(secUnrealized, baseCurrency, 0)}
+              sub={floatingProfitHint}
               gain={pnlUp}
-              hasData={secUnrealized !== 0}
+              hasData={secUnrealized != null && secUnrealized !== 0}
             />
             {marketStats.map((s) => (
               <KpiCard
