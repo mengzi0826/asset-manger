@@ -1,6 +1,11 @@
+import { summarizeSecuritySession } from "@/lib/securitySessionSummary";
+import { securityDayDetails } from "@/lib/securityDayDetails";
+import { PositionDetails } from "./PositionDetails";
+import { ClosedPositions } from "./ClosedPositions";
+import { securityLifetimeProfit } from "@/lib/securityLifetimeProfit";
 import { PageHeader } from "@/components/PageHeader";
 import Link from "next/link";
-import { ExternalLink, Plus, TrendingUp } from "lucide-react";
+import { Plus, TrendingUp } from "lucide-react";
 import { getSetting } from "@/lib/db";
 import { convert, kickoffRatesRefresh } from "@/lib/fx";
 import { kickoffStockPricesRefresh, parseStockSymbol } from "@/lib/stocks";
@@ -26,7 +31,7 @@ export const dynamic = "force-dynamic";
 
 const compact = (v: number) => formatCompact(v, { digits: 2 });
 
-export default async function SecuritiesPage() {
+export default async function SecuritiesPage({ searchParams }: { searchParams: { view?: string } }) {
   kickoffRatesRefresh();
   kickoffStockPricesRefresh();
 
@@ -61,6 +66,7 @@ export default async function SecuritiesPage() {
   );
 
   const floatingProfit = summarizeFloatingProfit(secItems);
+  const lifetime = securityLifetimeProfit(floatingProfit.total, baseCurrency);
   const secUnrealized = floatingProfit.total ?? floatingProfit.knownSubtotal;
   const secTotalCost = secItems.reduce((sum, asset) => {
     if (asset.unit_cost == null) return sum;
@@ -127,6 +133,10 @@ export default async function SecuritiesPage() {
     qtyDayStartById
   );
 
+  const sessionSummary = summarizeSecuritySession(todayPnL, [
+    ...secItems.map(item => ({ id: item.id, name: item.name, market: stockInfoByAssetId.get(item.id)?.market ?? null })),
+    ...todayPnL.closedPositions.map(item => ({ id: item.id, name: item.name, market: parseStockSymbol(item.symbol)?.market ?? null }))
+  ]);
   const now = new Date();
   const panelData: SecuritiesPanelData = {
     totalValue,
@@ -139,6 +149,7 @@ export default async function SecuritiesPage() {
       "港股": isHkMarketOpen(now),
       "美股": isUsMarketOpen(now)
     },
+    dayDetails: securityDayDetails([...new Set([...securitiesHistory, ...pnlHistory].map(point => point.date))], baseCurrency, sessionSummary),
     securitiesHistory,
     pnlHistory,
     positions: secPositions
@@ -217,34 +228,21 @@ export default async function SecuritiesPage() {
             ))}
           </div>
 
-          {/* 上排：总市值走势 + 浮动盈亏走势 左右分布、等宽等高 */}
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 xl:items-stretch">
-            <TrendCard data={panelData} currency={baseCurrency} />
-            <PnLCard data={panelData} currency={baseCurrency} />
-          </div>
-          <p className="text-[12px] text-ink-400">
-            浮盈以手填券商均价为准；分红可能已反映在均价中，请勿重复加总。费用是否已包含取决于录入成本。
-            盈亏曲线按当前持仓回算，不含已清仓持仓，不代表真实历史投资收益。
-          </p>
-
-          {/* 下排：持仓明细整行铺开 */}
-          <section className="card">
-            <div className="card-header">
-              <div className="card-title">持仓明细</div>
-              <Link
-                href="/assets"
-                className="inline-flex items-center gap-1 text-[12px] text-ink-500 hover:text-gold-500"
-              >
-                编辑
-                <ExternalLink className="h-3 w-3" />
-              </Link>
-            </div>
-            <div className="card-body">
-              <SecuritiesDetailSection data={panelData} />
-            </div>
-          </section>
         </>
       )}
+      {(hasPositions || lifetime.closed.length > 0) && (
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 xl:items-stretch">
+            {hasPositions && <TrendCard data={panelData} currency={baseCurrency} />}
+            <PnLCard cumulativeHistory={lifetime.history} data={panelData} currency={baseCurrency} />
+          </div>
+      )}
+      <PositionDetails
+        showClosed={searchParams.view === "closed"}
+        hasHoldings={hasPositions}
+        hasClosed={lifetime.closed.length > 0}
+        holdings={<SecuritiesDetailSection data={panelData} />}
+        closed={<ClosedPositions rows={lifetime.closed} />}
+      />
     </div>
   );
 }
@@ -292,6 +290,7 @@ function KpiCard({
 function SecuritiesDetailSection({ data }: { data: SecuritiesPanelData }) {
   const detailOnly: SecuritiesPanelData = {
     ...data,
+    dayDetails: undefined,
     securitiesHistory: [],
     pnlHistory: []
   };

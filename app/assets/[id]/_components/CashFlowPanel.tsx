@@ -2,9 +2,10 @@
 
 import { cloneElement, isValidElement, useId } from "react";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDownLeft, ArrowUpRight, Loader2 } from "lucide-react";
+import type { UndoableCashFlow } from "@/lib/cashFlowUndo";
 import type { CashFlowEntry } from "@/lib/history";
 import { formatCnDateTime, formatMoney } from "@/lib/utils";
 
@@ -16,6 +17,7 @@ export function CashFlowPanel({
   currency,
   currentAmount,
   entries,
+  undoTarget,
   readOnly = false
 }: {
   assetId: number;
@@ -23,6 +25,7 @@ export function CashFlowPanel({
   currency: string;
   currentAmount: number;
   entries: CashFlowEntry[];
+  undoTarget?: UndoableCashFlow | null;
   readOnly?: boolean;
 }) {
   const router = useRouter();
@@ -30,6 +33,8 @@ export function CashFlowPanel({
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
+  const [refreshing, startTransition] = useTransition();
+  const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const amountNum = Number(amount);
@@ -42,6 +47,7 @@ export function CashFlowPanel({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setStatus("");
     if (!hasAmount) return setError("请填写大于 0 的金额");
     if (!reason.trim()) return setError("请填写现金变化的原因");
     if (insufficient) return setError("消费金额超过当前现金余额");
@@ -59,9 +65,33 @@ export function CashFlowPanel({
       }
       setAmount("");
       setReason("");
-      router.refresh();
+      startTransition(() => router.refresh());
     } catch {
       setError("现金变动记录失败，请稍后重试");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function undo() {
+    if (!undoTarget || pending || refreshing) return;
+    const label = undoTarget.delta > 0 ? "入金" : "消费";
+    const value = formatMoney(Math.abs(undoTarget.delta), undoTarget.currency);
+    if (!window.confirm(`撤回「${assetName}」上次${label} ${value}？\n${formatCnDateTime(undoTarget.occurredAt)} · ${undoTarget.reason}`)) return;
+    setError(null);
+    setStatus("");
+    setPending(true);
+    try {
+      const response = await fetch(`/api/assets/${assetId}/cash-flow`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ eventId: undoTarget.eventId, changeId: undoTarget.changeId })
+      });
+      if (response.ok) setStatus(`已撤回${label} ${value}`);
+      else setError((await response.json()).error ?? "撤回失败");
+      startTransition(() => router.refresh());
+    } catch {
+      setError("无法确认撤回结果，请刷新后核对。");
     } finally {
       setPending(false);
     }
@@ -138,7 +168,7 @@ export function CashFlowPanel({
             </div>
             <button
               className={type === "deposit" ? "btn-primary" : "btn-danger"}
-              disabled={pending || insufficient}
+              disabled={pending || refreshing || insufficient}
             >
               {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               确认{type === "deposit" ? "入金" : "消费"}「{assetName}」
@@ -155,8 +185,16 @@ export function CashFlowPanel({
         <div className={readOnly ? "" : "border-t border-hair pt-4"}>
           <div className="mb-2.5 flex items-center justify-between gap-3">
             <div className="text-[13px] font-medium text-ink-700">{readOnly ? "入账记录" : "最近现金流"}</div>
-            <span className="text-[12px] text-ink-400">{entries.length} 条</span>
+            <div className="flex items-center gap-3">
+              {undoTarget && !readOnly && (
+                <button type="button" className="btn-outline" disabled={pending || refreshing} onClick={undo}>
+                  撤回上次提交
+                </button>
+              )}
+              <span className="text-[12px] text-ink-400">{entries.length} 条</span>
+            </div>
           </div>
+          {status && <p role="status" className="mb-2 text-sm text-ink-600">{status}</p>}
           {entries.length === 0 ? (
             <div className="rounded-md bg-canvas-sunk/60 px-3 py-5 text-center text-[13px] text-ink-400">
               {readOnly ? "暂无利息收入" : "暂无入金、消费或利息记录"}

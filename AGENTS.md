@@ -158,6 +158,8 @@ JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asse
 
 `listSnapshots` 的数量参数表示最近 N 个观测点（返回日期正序）；`GET /api/history` 支持 from/to 区间及汇总，证券市值曲线保留清仓后的零值。
 
+证券图表浮窗按悬停北京日展示证券业务事件。市场盈亏和盈利／亏损各前三复用行情会话日口径，随组合快照保存为可空的 `portfolio_snapshot.security_session`，旧备份仍可导入。旧日期仅使用可核实的历史行情、日初股数及历史汇率，部分覆盖须标明；禁止用市值差或当前持仓回填。
+
 价格 sparkline：`listStockPriceHistory` 合并 `stock_price_daily`（优先）与 `asset_change` 里对 `current_price` 的修改。
 
 总览新鲜度：`app/_components/DataFreshness.tsx`，数据来自上次成功时间和两枚 `last_*_refresh_error`。过期判定复用 `shouldRefreshFxEvery8h` / `shouldRefreshStocks`，不要在页面里再写一套。
@@ -185,6 +187,10 @@ JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asse
 - 新建证券也可在 `POST /api/assets` 带 `cash_asset_id`，按 `quantity × unit_cost` 扣现金。
 - 记录交易面板下方的明细来自 `listSecurityTrades`：只读该证券在 `portfolio_event` 上的证券腿（增持、减持、分红、清仓，以及未扣现金的建仓）。禁止用 `asset_change` 反推。事件层上线前的操作不会出现在这张列表里。
 
+证券页「累计盈亏」为当前持仓浮动盈亏加已清仓盈亏，均采用券商成本。清仓用最后卖出股数 ×（实际卖出价 − 卖出前券商成本价），按清仓时历史汇率折算；分红不重复累加。无实际卖出价的旧删除记录不计入合计，禁止用行情价推断。累计盈亏走势按各日逐资产估值加截至该日的已清仓盈亏，今日点取当前合计。
+
+证券交易撤回限每只证券在「记录交易」的最后一次提交，允许跨日，不含首次建仓。恢复原份额和券商成本，按原现金腿冲回；清仓凭明确删除快照恢复同一资产 ID。撤回写 `security_trade_undo` 和资产日志，当天快照同事务更新，保留原日快照。
+
 改仓必须走这些 API（或至少写 `asset_change`），否则今日盈亏的日初股数还原会失败。
 
 ## 现金流
@@ -195,6 +201,8 @@ JSON 备份（`app/api/backup`）`version: 6` 导出：category / account / asse
 - 更新余额与写日志在同一事务内完成，并刷新当日快照。
 - 记录复用 `asset_change`：除 `amount` diff 外，`field_changes` 还写入 `cash_flow_type`、带方向的 `cash_flow_amount` 和 `cash_flow_reason`。`listCashFlowEntries` 用它们还原现金流列表。
 - 同一事务还要写 `portfolio_event` 的 `cash_deposit` / `cash_expense` 与现金资产腿，供报表统一统计。
+
+撤回仅针对该资产最近一次手动提交，允许跨北京日。以原事件 ID 和日志 ID 校验目标，撤回日按当前余额反向冲回，记录同类负金额事件及反向现金腿；原提交从最近现金流隐藏，历史日志保留。原提交和撤回的收支统计用原提交时汇率抵消，旧日快照保留。
 
 ## 利息收入
 

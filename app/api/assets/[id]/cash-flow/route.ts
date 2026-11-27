@@ -1,3 +1,4 @@
+import { undoLastCashFlow } from "@/lib/cashFlowUndo";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDB, type AssetRow } from "@/lib/db";
@@ -59,7 +60,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       const nextAmount = currentAmount + signedAmount;
       db.prepare("UPDATE asset SET amount = ?, updated_at = ? WHERE id = ?").run(nextAmount, now, id);
       const after = db.prepare("SELECT * FROM asset WHERE id = ?").get(id) as AssetRow;
-      logAssetChange({
+      const changeId = logAssetChange({
         action: "update",
         before,
         after,
@@ -74,6 +75,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         currency: after.currency,
         grossAmount: parsed.amount,
         reason: parsed.reason,
+        metadata: { cash_flow_change_id: changeId },
         occurredAt: now,
         legs: [
           {
@@ -93,5 +95,20 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ asset });
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? "Invalid" }, { status: 400 });
+  }
+}
+
+export async function DELETE(req: Request, { params }: { params: { id: string } }) {
+  const id = Number(params.id);
+  const target = z.object({ eventId: z.number().int().positive(), changeId: z.number().int().positive() })
+    .safeParse(await req.json().catch(() => null));
+  if (!Number.isSafeInteger(id) || id <= 0 || !target.success) {
+    return NextResponse.json({ error: "无效的收支记录" }, { status: 400 });
+  }
+  try {
+    const asset = undoLastCashFlow(id, target.data.eventId, target.data.changeId);
+    return NextResponse.json({ asset });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "撤回失败" }, { status: 409 });
   }
 }

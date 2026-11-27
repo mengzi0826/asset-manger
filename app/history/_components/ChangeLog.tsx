@@ -26,6 +26,9 @@ const FIELD_LABELS: Record<string, string> = {
   cash_flow_type: "现金操作",
   cash_flow_amount: "现金流金额",
   cash_flow_reason: "现金流原因",
+  cash_flow_reversed_at: "已撤回时间",
+  cash_flow_undo: "撤回收支",
+  security_trade_undo: "撤回证券交易",
   interest_annual_rate: "年化利率",
   interest_principal: "计息本金",
   current_price: "当前价",
@@ -172,10 +175,12 @@ function ChangeLogEntry({ change }: { change: AssetChange }) {
 function summarizeChange(change: AssetChange, fields: ChangeFields, snapshot: Record<string, unknown>) {
   const type = getChangeLogType(change);
   const currency = typeof snapshot.currency === "string" ? snapshot.currency : undefined;
+  if (typeof fields.security_trade_undo?.to === "string") return fields.security_trade_undo.to;
+  if (typeof fields.cash_flow_undo?.to === "string") return fields.cash_flow_undo.to;
   const cashAmount = fields.cash_flow_amount?.to;
   if ((type === "deposit" || type === "expense" || type === "interest") && typeof cashAmount === "number") {
     const amount = currency ? formatMoney(Math.abs(cashAmount), currency) : renderValue(Math.abs(cashAmount), "amount");
-    return `${type === "expense" ? "支出" : "入账"} ${amount}${fields.cash_flow_reason?.to ? ` · ${String(fields.cash_flow_reason.to)}` : ""}`;
+    return `${fields.cash_flow_reversed_at?.to ? "已撤回 · " : ""}${type === "expense" ? "支出" : "入账"} ${amount}${fields.cash_flow_reason?.to ? ` · ${String(fields.cash_flow_reason.to)}` : ""}`;
   }
   if (type === "dividend" && typeof fields.dividend_amount?.to === "number") {
     return `分红到账 ${currency ? formatMoney(fields.dividend_amount.to, currency) : renderValue(fields.dividend_amount.to, "amount")}`;

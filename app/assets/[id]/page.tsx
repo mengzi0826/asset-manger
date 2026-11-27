@@ -1,3 +1,5 @@
+import { lastSecuritySubmission } from "@/lib/securityTradeUndo";
+import { lastManualCashFlow } from "@/lib/cashFlowUndo";
 import { PageHeader } from "@/components/PageHeader";
 import { OperationSheet } from "@/components/ui/OperationSheet";
 import Link from "next/link";
@@ -68,6 +70,7 @@ export default async function EditAssetPage({
           currentUnitCost={asset.unit_cost}
           currentPrice={asset.current_price}
           cashAssets={cashAssets}
+          undoTarget={lastSecuritySubmission(asset.id)}
           trades={listSecurityTrades(asset.id)}
         />
         </OperationSheet>
@@ -79,6 +82,7 @@ export default async function EditAssetPage({
           assetName={asset.name}
           currency={asset.currency}
           currentAmount={asset.amount ?? 0}
+          undoTarget={lastManualCashFlow(asset.id)}
           entries={listCashFlowEntries(asset.id)}
         />
         </OperationSheet>

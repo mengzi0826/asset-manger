@@ -111,6 +111,7 @@ test("FX report and net-worth breakdown share currency and endpoint coverage", (
   const db = new Database(":memory:");
   db.exec(fs.readFileSync(path.resolve(__dirname, "../lib/schema.sql"), "utf8"));
   const { summarizeFxImpact } = load("history", {
+    "./securitySessionSummary": load("securitySessionSummary"),
     "./db": { getDB: () => db },
     "./fx": {}, "./valuation": {}, "./time": {}, "./stocks": {}, "./changeLog": {},
     "./historicalFxImpact": historicalFx

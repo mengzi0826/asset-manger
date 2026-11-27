@@ -11,6 +11,7 @@ export type PortfolioEventType =
   | "security_buy"
   | "security_sell"
   | "security_dividend"
+  | "security_trade_undo"
   | "security_liquidation"
   | "interest_income";
 
@@ -125,6 +126,7 @@ export function recordPortfolioEvent(input: PortfolioEventInput): number {
 }
 
 export function listPortfolioEvents(options: {
+  eventId?: number;
   fromDate?: string;
   toDate?: string;
   types?: PortfolioEventType[];
@@ -134,6 +136,7 @@ export function listPortfolioEvents(options: {
   const db = getDB();
   const where: string[] = [];
   const args: Array<string | number> = [];
+  if (options.eventId != null) { where.push("id = ?"); args.push(options.eventId); }
   if (options.fromDate) {
     where.push("substr(occurred_at, 1, 10) >= ?");
     args.push(options.fromDate);
@@ -262,6 +265,7 @@ export function listSecurityTrades(assetId: number, limit = 50): SecurityTradeEn
        WHERE e.event_type IN (
          'security_buy', 'security_sell', 'security_dividend', 'security_liquidation', 'asset_created'
        )
+       AND CASE WHEN json_valid(e.metadata) THEN json_extract(e.metadata, '$.undone_at') END IS NULL
        ORDER BY e.occurred_at DESC, e.id DESC
        LIMIT ?`
     )
@@ -340,26 +344,33 @@ export function summarizePortfolioEvents(from: string, to: string) {
 
 /** 按业务发生时点折算；缺历史汇率时保留原币金额，不用今天汇率补齐。 */
 export function summarizeCashFlow(from: string, to: string, type: "cash_expense" | "cash_deposit", baseCurrency: string) {
-  const rows = getDB().prepare(`SELECT currency, occurred_at AS at, COUNT(*) AS count,
-    SUM(ABS(gross_amount)) AS amount, COUNT(gross_amount) AS knownCount
+  const rows = getDB().prepare(`WITH flows AS (
+    SELECT currency, gross_amount, occurred_at, CASE WHEN json_valid(metadata)
+      AND json_type(CASE WHEN json_valid(metadata) THEN metadata END, '$.reverses_event_id') = 'integer'
+      THEN json_extract(metadata, '$.original_occurred_at') END AS reversed_at
     FROM portfolio_event WHERE event_type = ? AND substr(occurred_at, 1, 10) BETWEEN ? AND ?
-    GROUP BY currency, occurred_at`).all(type, from, to) as Array<{
-      currency: string; at: string; count: number; knownCount: number; amount: number | null;
+  ) SELECT currency, COALESCE(reversed_at, occurred_at) AS at, COUNT(*) AS count,
+    SUM(CASE WHEN reversed_at IS NULL THEN 1 ELSE -1 END) AS netCount,
+    SUM(CASE WHEN reversed_at IS NULL THEN ABS(gross_amount) ELSE -ABS(gross_amount) END) AS amount,
+    COUNT(gross_amount) AS knownCount FROM flows
+    GROUP BY currency, at`).all(type, from, to) as Array<{
+      currency: string; at: string; count: number; netCount: number; knownCount: number; amount: number | null;
     }>;
   const grouped = new Map<string, { currency: string; count: number; amount: number | null }>();
   const missingCurrencies = new Set<string>();
   let total = 0;
   for (const row of rows) {
     const entry = grouped.get(row.currency) ?? { currency: row.currency, count: 0, amount: 0 };
-    entry.count += row.count;
+    entry.count += Math.max(0, row.netCount);
     entry.amount = entry.amount == null || row.knownCount !== row.count ? null : entry.amount + (row.amount ?? 0);
     grouped.set(row.currency, entry);
+    if (row.knownCount === row.count && row.amount === 0) continue;
     const rate = getHistoricalRateAtOrBefore(row.currency, baseCurrency, row.at);
     if (rate == null || row.knownCount !== row.count) missingCurrencies.add(row.currency);
     else total += (row.amount ?? 0) * rate;
   }
   return {
-    count: rows.reduce((sum, row) => sum + row.count, 0),
+    count: rows.reduce((sum, row) => sum + Math.max(0, row.netCount), 0),
     byCurrency: [...grouped.values()],
     approximateBaseValue: missingCurrencies.size ? null : Math.round(total * 100) / 100,
     baseCurrency, conversionUsesCurrentRates: false,

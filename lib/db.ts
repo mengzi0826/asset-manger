@@ -38,6 +38,9 @@ function initDB(): Database.Database {
 const migratedConnections = new WeakSet<Database.Database>();
 function migrateSchema(db: Database.Database) {
   if (migratedConnections.has(db)) return;
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('portfolio_snapshot') WHERE name = 'security_session'").get()) {
+    db.exec("ALTER TABLE portfolio_snapshot ADD COLUMN security_session TEXT");
+  }
   // 日志筛选按真实时刻排序，兼容旧 UTC 与新北京时区时间戳。
   db.exec("CREATE INDEX IF NOT EXISTS idx_asset_change_instant ON asset_change(julianday(created_at) DESC, id DESC)");
   // 汇率与逐资产估值历史：不从组合总额反推旧日明细，只精确回填当前 fx_rate 的已有观测点。

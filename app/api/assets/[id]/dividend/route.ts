@@ -48,13 +48,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "invalid id" }, { status: 400 });
     }
 
+    const parsed = dividendSchema.parse(await req.json());
     const security = getAssetWithCode(id);
     if (!security) return NextResponse.json({ error: "证券不存在" }, { status: 404 });
     if (security.category_code !== "securities") {
       return NextResponse.json({ error: "该资产不是证券，无法分红" }, { status: 400 });
     }
 
-    const parsed = dividendSchema.parse(await req.json());
     const qty = security.quantity ?? 0;
     if (!Number.isFinite(qty) || qty <= 0) {
       return NextResponse.json({ error: "当前无持仓，无法分红" }, { status: 400 });

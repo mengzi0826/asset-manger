@@ -21,6 +21,7 @@ const allowedTypes: PortfolioEventType[] = [
   "security_sell",
   "security_dividend",
   "security_liquidation",
+  "security_trade_undo",
   "interest_income"
 ];
 

@@ -1,3 +1,4 @@
+import { summarizeSecuritySession } from "./securitySessionSummary";
 import {
   getDB,
   type AssetRow,
@@ -5,7 +6,7 @@ import {
   type AssetValuationDaily,
   type PortfolioSnapshot
 } from "./db";
-import { convert, getRate } from "./fx";
+import { convert, getRate, getHistoricalRateAtOrBefore } from "./fx";
 import { computeAssetValue, valueAll } from "./valuation";
 import { isUsQuoteDateInDisplayWindow, nowCn, todayCn } from "./time";
 import { parseStockSymbol } from "./stocks";
@@ -37,10 +38,10 @@ function changeDateRange(from?: string, to?: string) {
  */
 export function mapSecurityQuantityBeforeFirstEditToday(
   assetIds: number[],
-  currentQtyById: Map<number, number>
+  currentQtyById: Map<number, number>,
+  today = todayCn()
 ): Map<number, number> {
   if (assetIds.length === 0) return new Map();
-  const today = todayCn();
   const { clauses, args } = changeDateRange(today, today);
   const db = getDB();
   const ph = assetIds.map(() => "?").join(",");
@@ -49,7 +50,8 @@ export function mapSecurityQuantityBeforeFirstEditToday(
       `SELECT asset_id, field_changes
        FROM asset_change
        WHERE asset_id IN (${ph})
-         AND action = 'update'
+         AND (action = 'update' OR (action = 'create' AND
+           CASE WHEN json_valid(field_changes) THEN json_extract(field_changes, '$.security_trade_undo.to') END IS NOT NULL))
          AND ${clauses.join(" AND ")}
          AND CASE WHEN json_valid(field_changes) THEN
                json_extract(field_changes, '$.quantity.from') IS NOT NULL
@@ -146,7 +148,7 @@ export function logAssetChange(params: {
     }
   }
 
-  db.prepare(
+  const result = db.prepare(
     `INSERT INTO asset_change
      (asset_id, account_id, asset_name, action, field_changes, snapshot, base_value_cny, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -160,6 +162,7 @@ export function logAssetChange(params: {
     valueCny,
     params.createdAt ?? nowCn()
   );
+  return Number(result.lastInsertRowid);
 }
 
 export function listChanges(limit = 200): AssetChange[] {
@@ -226,6 +229,7 @@ export function listCashFlowEntries(assetId: number, limit = 50): CashFlowEntry[
                WHEN json_valid(field_changes)
                THEN json_extract(field_changes, '$.cash_flow_type.to')
              END IN ('deposit', 'expense', 'interest')
+         AND CASE WHEN json_valid(field_changes) THEN json_extract(field_changes, '$.cash_flow_reversed_at.to') END IS NULL
        ORDER BY created_at DESC, id DESC
        LIMIT ?`
     )
@@ -258,12 +262,22 @@ export function recordSnapshot(baseCurrency: string): PortfolioSnapshot {
       rateByCurrency.set(item.currency, getRate(item.currency, baseCurrency));
     }
   }
+  const holdings = items.filter(item => item.category_code === "securities").map(item => ({
+    id: item.id, name: item.name, market: parseStockSymbol(item.symbol)?.market ?? null,
+    currency: item.currency, quantity: item.quantity ?? 0, currentPrice: item.current_price,
+    changePercent: item.change_percent, changeQuoteDate: item.change_quote_date
+  }));
+  const session = computeTodayStockPnL(holdings, baseCurrency);
+  const sessionSummary = summarizeSecuritySession(session, [...holdings, ...session.closedPositions.map(item => ({
+    id: item.id, name: item.name, market: parseStockSymbol(item.symbol)?.market ?? null
+  }))]);
   const upsertSnapshot = db.prepare(
-    `INSERT INTO portfolio_snapshot (date, base_currency, total_value, breakdown, created_at)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO portfolio_snapshot (date, base_currency, total_value, breakdown, created_at, security_session)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(date, base_currency) DO UPDATE SET
        total_value = excluded.total_value,
        breakdown = excluded.breakdown,
+       security_session = excluded.security_session,
        created_at = excluded.created_at`
   );
   const clearDaily = db.prepare(
@@ -277,7 +291,7 @@ export function recordSnapshot(baseCurrency: string): PortfolioSnapshot {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   db.transaction(() => {
-    upsertSnapshot.run(today, baseCurrency, total, JSON.stringify(byCategory), capturedAt);
+    upsertSnapshot.run(today, baseCurrency, total, JSON.stringify(byCategory), capturedAt, JSON.stringify(sessionSummary));
     // 当日快照语义是“当天最新状态”，先清掉同日旧明细，避免已删除资产残留。
     clearDaily.run(today, baseCurrency);
     for (const item of items) {
@@ -474,7 +488,8 @@ export function computeTodayStockPnL(
     /** 行情会话日 `YYYY-MM-DD` */
     changeQuoteDate?: string | null;
   }>,
-  baseCurrency: string
+  baseCurrency: string,
+  historicalDay?: string
 ): {
   totalBase: number;
   availableTotalBase: number | null;
@@ -488,7 +503,7 @@ export function computeTodayStockPnL(
 } {
   const perAsset = new Map<number, TodayPnLEntry>();
   let totalBase = 0;
-  const today = todayCn();
+  const today = historicalDay ?? todayCn();
   // 清仓会删除当前资产，必须从当天删除记录保留的状态取回计算候选。
   // 旧记录若没有分类依据，不猜测；不合并已复用 ID 的旧历史。
   const existingIds = new Set(items.map(item => item.id));
@@ -530,7 +545,7 @@ export function computeTodayStockPnL(
   }
   const qtyDayStartById = mapSecurityQuantityBeforeFirstEditToday(
     items.map((i) => i.id),
-    currentQtyById
+    currentQtyById, today
   );
 
   for (const item of items) {
@@ -559,7 +574,10 @@ export function computeTodayStockPnL(
     const todayChangePct = item.changePercent;
 
     const todayPnLNative = todayPriceChange * qtyDayStart;
-    const todayPnLBase = convert(todayPnLNative, item.currency, baseCurrency);
+    const historicalRate = historicalDay ? getHistoricalRateAtOrBefore(item.currency, baseCurrency, historicalDay) : null;
+    const todayPnLBase = historicalDay
+      ? historicalRate == null ? null : todayPnLNative * historicalRate
+      : convert(todayPnLNative, item.currency, baseCurrency);
     if (todayPnLBase == null) {
       missingRates.add(`${item.currency}->${baseCurrency}`);
       continue;

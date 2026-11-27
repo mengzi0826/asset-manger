@@ -37,6 +37,7 @@ const EVENT_LABELS: Record<PortfolioEventType, string> = {
   security_buy: "证券买入",
   security_sell: "证券卖出",
   security_dividend: "证券分红",
+  security_trade_undo: "撤回证券交易",
   security_liquidation: "证券清仓",
   interest_income: "利息收入"
 };

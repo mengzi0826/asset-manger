@@ -91,7 +91,12 @@ export function calculateNetWorthChange(input: {
     nativeEffects.set(id, (nativeEffects.get(id) ?? 0) + amount);
     quantityEffects.set(id, (quantityEffects.get(id) ?? 0) + quantity);
   };
-  for (const event of events) {
+  for (const recorded of events) {
+    const original = recorded.metadata?.original_type;
+    const event = recorded.type !== "security_trade_undo" ? recorded : {
+      ...recorded, type: original === "security_dividend" ? "security_dividend" :
+        original === "security_buy" ? "security_sell" : "security_buy"
+    };
     for (const leg of event.legs) if (leg.assetId != null) {
       ids.add(leg.assetId);
       const category = event.metadata?.category_code;

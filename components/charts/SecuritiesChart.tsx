@@ -10,6 +10,8 @@ import {
   CartesianGrid,
   ReferenceLine
 } from "recharts";
+import type { SecurityDayDetail } from "@/lib/securityDayDetails";
+import { SecurityDayTooltip } from "./SecurityDayTooltip";
 import { useState } from "react";
 import { useTheme } from "@/lib/useTheme";
 import { formatCompact } from "@/lib/utils";
@@ -109,6 +111,7 @@ export interface SecuritiesPanelData {
   /** 每日浮动盈亏序列（由 asset_change 价格记录重建） */
   pnlHistory: Array<{ date: string; pnl: number }>;
   positions: SecuritiesPosition[];
+  dayDetails?: Record<string, SecurityDayDetail>;
 }
 
 /* ─────────────── palette ─────────────── */
@@ -223,11 +226,13 @@ function TotalTrendChart({
   data,
   currency,
   isDark,
+  details,
   tall = false
 }: {
   data: Array<{ date: string; value: number }>;
   currency: string;
   isDark: boolean;
+  details?: SecuritiesPanelData["dayDetails"];
   tall?: boolean;
 }) {
   const pal = usePalette(isDark);
@@ -277,7 +282,11 @@ function TotalTrendChart({
           />
           <ReferenceLine y={first} stroke={pal.grid} strokeDasharray="3 3" />
           <Tooltip
-            wrapperStyle={{ outline: "none" }}
+            content={details ? ({ active, label: date, payload }) => active && date ? (
+              <SecurityDayTooltip date={String(date)} day={details[String(date)]} value={payload?.[0]?.value as number | undefined}
+                currency={currency} metric={"证券市值"} />
+            ) : null : undefined}
+            wrapperStyle={{ outline: "none", zIndex: 10 }}
             contentStyle={{
               background: pal.tooltipBg,
               border: `1px solid ${pal.tooltipBorder}`,
@@ -311,29 +320,34 @@ function PnLTrendChart({
   data,
   currency,
   isDark,
+  label = "浮动盈亏",
+  details,
   tall = false
 }: {
-  data: Array<{ date: string; pnl: number }>;
+  data: Array<{ date: string; pnl: number | null }>;
   currency: string;
   isDark: boolean;
+  label?: string;
+  details?: SecuritiesPanelData["dayDetails"];
   tall?: boolean;
 }) {
   const pal = usePalette(isDark);
   const h = tall ? 200 : 160;
 
-  if (data.length < 2) {
+  const known = data.filter(point => point.pnl != null);
+  if (!known.length) {
     return (
       <div
         className="flex items-center justify-center text-[12px] text-ink-400"
         style={{ height: h }}
       >
-        暂无盈亏历史（需配置买入价，且当前价至少刷新过一次）
+        所选区间暂无可用盈亏数据
       </div>
     );
   }
 
   // 为每个点标注颜色方向（用于渐变 id）
-  const last = data[data.length - 1].pnl;
+  const last = known[known.length - 1].pnl!;
   const up = last >= 0;
   const stroke = up ? pal.gainStroke : pal.lossStroke;
   const gradId = `pnl-grad-${up ? "gain" : "loss"}`;
@@ -366,7 +380,11 @@ function PnLTrendChart({
           {/* 零轴基准线 */}
           <ReferenceLine y={0} stroke={pal.axisLine} strokeDasharray="3 3" strokeWidth={1.2} />
           <Tooltip
-            wrapperStyle={{ outline: "none" }}
+            content={details ? ({ active, label: date, payload }) => active && date ? (
+              <SecurityDayTooltip date={String(date)} day={details[String(date)]} value={payload?.[0]?.value as number | undefined}
+                currency={currency} metric={label} />
+            ) : null : undefined}
+            wrapperStyle={{ outline: "none", zIndex: 10 }}
             contentStyle={{
               background: pal.tooltipBg,
               border: `1px solid ${pal.tooltipBorder}`,
@@ -378,13 +396,14 @@ function PnLTrendChart({
             }}
             labelStyle={{ color: pal.tooltipLabel, fontSize: 12 }}
             formatter={(v: number) => [
-              `${v >= 0 ? "+" : ""}${v.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${currency}`,
-              "浮动盈亏"
+              `${v >= 0 ? "+" : ""}${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${currency}`,
+              label
             ]}
           />
           <Area
             type="monotone"
             dataKey="pnl"
+            dot={known.length === 1 ? { r: 3 } : false}
             stroke={stroke}
             strokeWidth={1.8}
             fill={`url(#${gradId})`}
@@ -526,7 +545,7 @@ export function TrendCard({
         </div>
       </div>
       <div className="card-body flex-1">
-        <TotalTrendChart data={filtered} currency={currency} isDark={isDark} tall />
+        <TotalTrendChart details={data.dayDetails} data={filtered} currency={currency} isDark={isDark} tall />
       </div>
     </section>
   );
@@ -534,26 +553,35 @@ export function TrendCard({
 
 export function PnLCard({
   data,
-  currency
+  currency,
+  cumulativeHistory
 }: {
   data: SecuritiesPanelData;
   currency: string;
+  cumulativeHistory: Array<{ date: string; pnl: number | null }>;
 }) {
   const isDark = useTheme() === "dark";
   const [range, setRange] = useState<RangeKey>("1Y");
-  const filtered = filterByRange(data.pnlHistory, RANGE_OPTIONS.find((r) => r.key === range)!.days);
+  const [mode, setMode] = useState<"浮动盈亏" | "累计盈亏">(data.positionCount ? "浮动盈亏" : "累计盈亏");
+  const filtered = filterByRange(mode === "浮动盈亏" ? data.pnlHistory : cumulativeHistory, RANGE_OPTIONS.find((r) => r.key === range)!.days);
 
   return (
     <section className="card flex flex-col">
-      <div className="card-header">
-        <div className="card-title">浮动盈亏走势</div>
+      <div className="card-header flex-wrap gap-2">
+        <div className="segmented" role="group" aria-label="盈亏走势">
+          {(["浮动盈亏", "累计盈亏"] as const).map(label => (
+            <button key={label} type="button" aria-pressed={mode === label}
+              className={`segmented-item ${mode === label ? "segmented-item-active" : "text-ink-400 hover:text-ink-700"}`}
+              onClick={() => setMode(label)}>{label}走势</button>
+          ))}
+        </div>
         <div className="flex items-center gap-3">
           <RangeSelector value={range} onChange={setRange} />
           <span className="chip tabular">以 {currency} 结算</span>
         </div>
       </div>
       <div className="card-body flex-1">
-        <PnLTrendChart data={filtered} currency={currency} isDark={isDark} tall />
+        <PnLTrendChart details={mode === "浮动盈亏" ? data.dayDetails : undefined} label={mode} data={filtered} currency={currency} isDark={isDark} tall />
       </div>
     </section>
   );

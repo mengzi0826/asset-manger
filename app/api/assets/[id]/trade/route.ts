@@ -54,14 +54,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "invalid id" }, { status: 400 });
     }
     const db = getDB();
+    const parsed = tradeSchema.parse(await req.json());
     const security = getAssetWithCode(id);
     if (!security) return NextResponse.json({ error: "证券不存在" }, { status: 404 });
     if (security.category_code !== "securities") {
       return NextResponse.json({ error: "该资产不是证券，无法交易" }, { status: 400 });
     }
 
-    const body = await req.json();
-    const parsed = tradeSchema.parse(body);
 
     const qtyDelta = parsed.quantity;
     const tradeValue = qtyDelta * parsed.price;

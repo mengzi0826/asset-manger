@@ -37,16 +37,19 @@ const insertChange = db.prepare(`INSERT INTO asset_change (asset_id, action, cre
 const addChange = row => insertChange.run({ action: "update", field_changes: null, snapshot: null, ...row });
 const setRate = db.prepare("INSERT INTO fx_rate (base, quote, rate, fetched_at) VALUES (?, ?, ?, ?)");
 let now;
-const { computeTodayStockPnL, listStockPriceHistory } = load("../lib/history.ts", {
+const sessionSummary = load("../lib/securitySessionSummary.ts");
+const history = load("../lib/history.ts", {
   "./db": database,
   "./fx": fx,
   "./valuation": valuation,
+  "./securitySessionSummary": sessionSummary,
   "./changeLog": { CHANGE_LOG_PAGE_SIZE: 20 },
   "./historicalFxImpact": load("../lib/historicalFxImpact.ts"),
   "./time": { ...time, todayCn: () => time.toCnIso(new Date(now)).slice(0, 10) },
   "./stocks": { parseStockSymbol: () => ({ market: "us" }) }
 });
 
+const { computeTodayStockPnL, listStockPriceHistory } = history;
 const stock = (id, market, date, extra = {}) => ({
   id, market, changeQuoteDate: date, currency: { hs: "CNY", hk: "HKD", us: "USD" }[market],
   quantity: 2, currentPrice: 110, changePercent: 0.1, ...extra
@@ -212,6 +215,73 @@ test("a zero-valued foreign position uses the real FX rate for floating loss", (
   db.exec("DELETE FROM fx_rate");
   assert.deepEqual(valuation.summarizeFloatingProfit(valuation.valueAll("CNY").items),
     { total: null, knownSubtotal: null, status: "unavailable" });
+});
+
+
+// Exercise the same closing events consumed by the securities dashboard.
+const portfolioEvents = load("../lib/portfolioEvents.ts", { "./db": database, "./time": time, "./fx": fx });
+const { securityLifetimeProfit } = load("../lib/securityLifetimeProfit.ts", {
+  "./portfolioEvents": portfolioEvents, "./fx": fx, "./db": database, "./time": { todayCn: () => "2026-11-01" }
+});
+db.prepare("INSERT OR REPLACE INTO history_integrity(id, reliable_from) VALUES (1, ?)").run("2026-01-01");
+function transaction(id, type, quantityDelta, quantityAfter, price, grossAmount, metadata = {}) {
+  portfolioEvents.recordPortfolioEvent({
+    type, occurredAt: "2026-10-30T12:00:00+08:00", currency: "CNY", grossAmount, metadata,
+    legs: [{ assetId: id, assetName: "测试证券", role: "security", quantityDelta, quantityAfter, unitPrice: price }]
+  });
+}
+test("broker-cost profit combines floating P&L with final sales only", () => {
+  transaction(1, "security_sell", -4, 8, 15, 60, { unit_cost_before: 10 });
+  transaction(1, "security_dividend", null, 8, null, 3);
+  transaction(1, "security_liquidation", -8, 0, 9, 72, { unit_cost_before: 10 });
+  transaction(2, "security_sell", -4, 0, 279.6, 1118.4, { unit_cost_before: 195.03 });
+  transaction(2, "security_liquidation", 0, 0, 279.6, 0);
+  const daily = db.prepare(`INSERT INTO asset_valuation_daily
+    (date, base_currency, asset_id, account_id, asset_name, category_code, currency,
+     quantity, unit_cost, unit_price, fx_rate, native_value, base_value, captured_at)
+    VALUES (?, 'CNY', 1, 1, 'Test', ?, 'USD', 4, 10, 12, ?, 48, 336, ?)`);
+  daily.run("2026-10-28", "securities", null, now);
+  daily.run("2026-10-29", "securities", 7, now);
+  daily.run("2026-10-30", "cash", 7, now);
+  const result = securityLifetimeProfit(-3, "CNY");
+  assert.deepEqual(result.history.map(point => point.date),
+    ["2026-10-28", "2026-10-29", "2026-10-30", "2026-11-01"]);
+  assert.equal(result.history[0].pnl, null);
+  money(result.history[1].pnl, 56);
+  money(result.history[2].pnl, 330.28);
+  assert.equal(result.history[3].pnl, result.total);
+  assert.equal(result.closed.length, 2);
+  money(result.closed[0].profit, 338.28);
+  money(result.closed[1].profit, -8);
+  money(result.total, 327.28);
+  assert.equal(securityLifetimeProfit(null, "CNY").total, null);
+  assert.equal(securityLifetimeProfit(0, "USD").total, null);
+  transaction(3, "security_liquidation", -1, 0, 5, 5);
+  assert.equal(securityLifetimeProfit(0, "CNY").total, null);
+});
+
+test("hover details separate winners and losers and retain the US session date", () => {
+  const amounts = [9, 3, 4, 2, 0, -1, -8, -3, -4];
+  const assets = amounts.map((_, id) => ({ id, name: String(id), market: id < 4 ? "us" : "hk" }));
+  const summary = sessionSummary.summarizeSecuritySession({
+    perAsset: new Map(amounts.map((pnl, id) => [id, { assetId: id, todayPnLBase: pnl }])),
+    status: "partial", sessionDates: { us: "2026-10-30" }
+  }, assets);
+  assert.deepEqual(summary.winners.map(row => row.pnl), [9, 4, 3]);
+  assert.deepEqual(summary.losers.map(row => row.pnl), [-8, -4, -3]);
+  assert.deepEqual(summary.markets, {us: 18, hk: -16});
+  const stored = db.prepare(`INSERT INTO portfolio_snapshot (date, base_currency, total_value, security_session)
+    VALUES (?, 'CNY', 0, ?)`);
+  stored.run("2026-10-30", JSON.stringify(summary));
+  const { securityDayDetails } = load("../lib/securityDayDetails.ts", {
+    zod: require("zod"), "./db": database, "./history": history, "./stocks": {}, "./securitySessionSummary": sessionSummary,
+    "./time": { ...time, todayCn: () => "2026-11-01" }, "./portfolioEvents": portfolioEvents
+  });
+  const details = securityDayDetails(["2026-10-30", "2026-10-31", "2026-11-01"], "CNY", summary);
+  assert.deepEqual(details["2026-10-30"].session, summary);
+  assert.ok(details["2026-10-30"].operations.some(item => item.includes("减仓")));
+  assert.equal(details["2026-10-31"].session, undefined);
+  assert.deepEqual(details["2026-11-01"].session, summary);
 });
 
 db.close();

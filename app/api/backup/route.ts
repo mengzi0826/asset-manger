@@ -162,9 +162,9 @@ export async function POST(req: Request) {
       }
       if (parsed.portfolio_snapshot) {
         const stmt = db.prepare(
-          "INSERT OR REPLACE INTO portfolio_snapshot (id, date, base_currency, total_value, breakdown, created_at) VALUES (@id, @date, @base_currency, @total_value, @breakdown, @created_at)"
+          "INSERT OR REPLACE INTO portfolio_snapshot (id, date, base_currency, total_value, breakdown, created_at, security_session) VALUES (@id, @date, @base_currency, @total_value, @breakdown, @created_at, @security_session)"
         );
-        for (const r of parsed.portfolio_snapshot) stmt.run({ breakdown: null, ...r });
+        for (const r of parsed.portfolio_snapshot) stmt.run({ breakdown: null, security_session: null, ...r });
       }
       if (parsed.asset_valuation_daily) {
         const stmt = db.prepare(

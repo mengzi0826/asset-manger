@@ -1,5 +1,7 @@
 "use client";
 
+import { UndoSecurityTrade, type UndoTarget } from "@/app/securities/UndoSecurityTrade";
+
 import { cloneElement, isValidElement, useId } from "react";
 
 import { useConfirm } from "@/components/ui/ConfirmProvider";
@@ -27,7 +29,7 @@ export function TradeDialog({
   currentUnitCost,
   currentPrice,
   cashAssets,
-  trades
+  trades, undoTarget
 }: {
   assetId: number;
   assetName: string;
@@ -37,6 +39,7 @@ export function TradeDialog({
   currentPrice: number | null;
   cashAssets: CashAssetOption[];
   trades: SecurityTradeEntry[];
+  undoTarget: UndoTarget | null;
 }) {
   const router = useRouter();
   const confirmAction = useConfirm();
@@ -198,7 +201,7 @@ export function TradeDialog({
           return;
         }
         // 资产已删除，编辑页不再存在，跳回持仓列表
-        router.push("/assets");
+        router.push("/securities?view=closed");
         return;
       }
 
@@ -480,6 +483,7 @@ export function TradeDialog({
         </div>
       </form>
 
+      {undoTarget && <UndoSecurityTrade assetId={assetId} name={assetName} target={undoTarget} disabled={pending} />}
       <TradeHistory trades={trades} currency={currency} />
       </div>
     </div>

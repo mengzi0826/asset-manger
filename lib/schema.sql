@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshot (
   date TEXT NOT NULL,                -- YYYY-MM-DD
   base_currency TEXT NOT NULL,       -- CNY / USD
   total_value REAL NOT NULL,
+  security_session TEXT,                -- 行情会话日市场盈亏及分项排名
   breakdown TEXT,                    -- JSON: {cash:x, deposit:y, ...}
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now', '+8 hours') || '+08:00'),
   UNIQUE(date, base_currency)

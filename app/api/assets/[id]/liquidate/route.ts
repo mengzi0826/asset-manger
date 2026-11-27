@@ -45,14 +45,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json({ error: "invalid id" }, { status: 400 });
     }
     const db = getDB();
+    const parsed = liquidateSchema.parse(await req.json());
     const security = getAssetWithCode(id);
     if (!security) return NextResponse.json({ error: "证券不存在" }, { status: 404 });
     if (security.category_code !== "securities") {
       return NextResponse.json({ error: "该资产不是证券，无法清仓" }, { status: 400 });
     }
 
-    const body = await req.json();
-    const parsed = liquidateSchema.parse(body);
 
     const qty = security.quantity ?? 0;
     const proceeds = qty * parsed.price;
@@ -106,7 +105,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       }
 
       db.prepare("DELETE FROM asset WHERE id = ?").run(id);
-      logAssetChange({ action: "delete", before: securityBefore });
+      const deletionLogId = logAssetChange({ action: "delete", before: securityBefore });
       recordPortfolioEvent({
         type: "security_liquidation",
         currency: securityBefore.currency,
@@ -116,6 +115,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
           cash_linked: Boolean(cash),
           cost_basis: "user_entered_broker_cost",
           unit_cost_before: securityBefore.unit_cost,
+          deletion_log_id: deletionLogId,
           quantity_before: securityBefore.quantity,
           fees_and_taxes: "unknown"
         },
